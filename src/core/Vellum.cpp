@@ -252,7 +252,7 @@ void selfCollideTriangles(std::vector<Vec3>& x, const std::vector<Vec3>& xprev, 
         for (int c = lo[2]; c <= hi[2]; ++c) for (int b = lo[1]; b <= hi[1]; ++b) for (int a = lo[0]; a <= hi[0]; ++a) start[bucket(a, b, c) + 1]++;
     }
     for (size_t k = 0; k < nb; ++k) start[k + 1] += start[k];
-    std::vector<int> items(size_t(start[nb]));
+    std::vector<int> items(static_cast<size_t>(start[nb]));
     {
         std::vector<int> fill(start.begin(), start.end() - 1);
         for (size_t t = 0; t < nt; ++t) {
