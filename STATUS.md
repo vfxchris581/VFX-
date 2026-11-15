@@ -43,7 +43,7 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Pyro smoke and fire | Partial | Grid fluid with buoyancy, vorticity, turbulence, dissipation, cooling, collider mesh, fire emission, cached. Dense grids only; no combustion/fuel model, gas expansion, shockwaves or sparse grids |
 | Voronoi Fracture | Working | Clips any closed mesh into Voronoi cells around points (input 2) or random interior points. Caps are triangulated with holes, so non-convex shapes (e.g. a torus) give closed pieces. Inside faces get `inside=1` and a color. Multithreaded. Tests check that every piece is closed, faces outward and that volume is conserved |
 | RBD Solver | Working | Rigid bodies with mass and inertia from the piece volume, convex-hull contacts, ground plane, static collider input, friction, bounce, sleeping. Glue between touching pieces with impact strength and propagation, so pieces break apart on impact. `v` sets initial velocity per piece and `active=0` pins a piece. Cached per frame. Tests check free fall against the analytic formula, settling, determinism, glue holding and breaking |
-| RBD limits | Note | Each piece collides as its **convex hull**, so concave pieces collide as if filled in. Contacts are vertex/edge-midpoint against hull, so very thin pieces can miss edge-on hits at high speed. No hinge/spring constraints, no Bullet integration, no debris emission yet |
+| RBD limits | Note | Each piece collides as its **convex hull**, so concave pieces collide as if filled in. Contacts are vertex/edge-midpoint against hull, so very thin pieces can miss edge-on hits at high speed. No joint limits or cone-twist constraints, no Bullet integration, no debris emission yet |
 
 ## Phase 4: fluids, Vellum, advanced physics
 
@@ -153,5 +153,18 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Viewport | Working: each prototype is uploaded once and drawn with GPU instancing (per-instance transform and colour), in both clay and material shading. The forest example draws 12,000 trees (1.7M triangles) |
 | Export | Working: OBJ, PLY and USD exports unpack packed prims (written as plain meshes) |
 | Example | `examples/forest.hdg`: 12,000 trees scattered on terrain, packed |
-| Limits | Not done: instances have no motion blur in renders; curves and loose points inside a prototype aren't drawn in the viewport (polygons are); no wireframe or point display for instances; VEX and most point/prim nodes don't see inside packed prims (unpack first); RBD doesn't simulate packed pieces yet; USD export doesn't write point instancers |
+| Limits | Not done: instances have no motion blur in renders; curves and loose points inside a prototype aren't drawn in the viewport (polygons are); no wireframe or point display for instances; VEX and most point/prim nodes don't see inside packed prims (unpack first); USD export doesn't write point instancers |
+
+## Phase 10: rigid-body constraints and packed pieces
+
+| Item | Status |
+|---|---|
+| Constraint input | Working: the RBD Solver's third input takes 2-point lines; a point `piece` attribute names the pieces they join (-1 = a fixed point in the world; without the attribute the nearest piece is used). Prim attributes override the solver defaults per line: `constrainttype` (0 pin, 1 hinge, 2 spring), `stiffness`, `damping`, `breakforce`, `axis`, `motorspeed`, `motortorque`, `restscale` |
+| Pin and hinge | Working: ball joints (pivot at the world end, or the middle of the line) and hinges (ball joint plus a shared axis, with an optional speed motor) solved as velocity constraints in the same sequential-impulse loop as contacts, with position correction. Pinned or hinged pieces don't collide with each other. Tested: a 1 m pendulum keeps its length within 5 mm, swings to the other side and reaches the bottom in about 0.6 s (the analytic quarter period from 90 degrees); a 6-link chain keeps its spacing; a hinge allows no tilt and its motor reaches 3 rad/s |
+| Spring | Working: Hooke spring with damping between the two ends. Tested: settles where k x extension = m g, within 5 mm |
+| Breaking | Working: a constraint breaks when its force exceeds `breakforce`. Tested: a pin weaker than the box's weight lets go, a stronger one holds |
+| RBD Constraints node | Working: builds networks between nearby pieces (distance, max connections), along a chain, and to world anchors (piece numbers, plus an offset); writes the type and settings as attributes. "Show Constraints" on the solver draws them, green intact and red broken |
+| Packed pieces | Working: each packed prim in the solver's first input is a piece; the output moves the packed prims (only transforms change). Tested: packed copies simulate exactly like real copies; fracture, pack by piece, simulate works |
+| Example | `examples/wreckingball.hdg`: a steel ball on a world pin swings into a glued, fractured brick wall |
+| Limits | Not done: joint angle limits, cone-twist and slider joints; springs are explicit, so very stiff springs need more substeps; the pivot of a pin between two pieces is the middle of its line |
 

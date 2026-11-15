@@ -1,0 +1,138 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 1,
+  "nodes": [
+    {
+      "inputs": [],
+      "name": "ball",
+      "parms": {
+        "rows": 16,
+        "scale": 0.550000012
+      },
+      "type": "sphere",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": ["ball"],
+      "name": "ball_start",
+      "parms": {
+        "t": [-3.20000005, 3.4000001, 0]
+      },
+      "type": "xform",
+      "x": 0,
+      "y": 80
+    },
+    {
+      "inputs": ["ball_start"],
+      "name": "steel",
+      "parms": {
+        "color": [0.550000012, 0.560000002, 0.600000024],
+        "metal": 1,
+        "rough": 0.349999994,
+        "setcolor": 1
+      },
+      "type": "material",
+      "x": 0,
+      "y": 160
+    },
+    {
+      "inputs": [],
+      "name": "wall",
+      "parms": {
+        "size": [0.300000012, 2.5999999, 3],
+        "t": [0.600000024, 1.29999995, 0]
+      },
+      "type": "box",
+      "x": 260,
+      "y": 0
+    },
+    {
+      "inputs": ["wall", null],
+      "name": "fracture",
+      "parms": {
+        "pieces": 60,
+        "seed": 4
+      },
+      "type": "voronoifracture",
+      "x": 260,
+      "y": 80
+    },
+    {
+      "inputs": ["fracture"],
+      "name": "brick",
+      "parms": {
+        "color": [0.620000005, 0.330000013, 0.239999995],
+        "rough": 0.850000024,
+        "setcolor": 1
+      },
+      "type": "material",
+      "x": 260,
+      "y": 160
+    },
+    {
+      "inputs": ["steel", "brick", null, null, null, null, null, null],
+      "name": "pieces",
+      "parms": {},
+      "type": "merge",
+      "x": 120,
+      "y": 240
+    },
+    {
+      "inputs": ["pieces"],
+      "name": "chain",
+      "parms": {
+        "anchoroffset": [3.20000005, 3.29999995, 0],
+        "anchors": "0",
+        "connect": 2
+      },
+      "type": "rbdconstraints",
+      "x": 340,
+      "y": 240
+    },
+    {
+      "inputs": ["pieces", null, "chain"],
+      "name": "rbd",
+      "parms": {
+        "gluestrength": 0.5,
+        "showcons": 1
+      },
+      "type": "rbdsolver",
+      "x": 120,
+      "y": 320
+    },
+    {
+      "inputs": ["rbd"],
+      "name": "OUT",
+      "parms": {},
+      "type": "null",
+      "x": 120,
+      "y": 400
+    }
+  ],
+  "range": [1, 240],
+  "render": {
+    "bounces": 4,
+    "camera": [-0.600000024, 2.4000001, 0, -40, 10, 8.5, 45],
+    "curveWidth": 0.0120000001,
+    "denoise": false,
+    "dof": false,
+    "exposure": 1,
+    "focusDist": 5,
+    "fstop": 4,
+    "ground": false,
+    "groundY": 0,
+    "height": 540,
+    "motionBlur": false,
+    "samples": 48,
+    "shutter": 0.5,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

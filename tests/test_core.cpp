@@ -2520,6 +2520,213 @@ TEST(packed_prims) {
     CHECK(normalN > 100 && normalOk >= normalN * 97 / 100);
 }
 
+// ---------------------------------------------------------------- RBD constraints (phase 10)
+static Vec3 rbdCenter(const Geometry& g, size_t from, size_t to) {
+    Vec3 s(0);
+    for (size_t i = from; i < to; ++i) s += g.P[i];
+    return s / float(std::max<size_t>(1, to - from));
+}
+static Node* rbdBox(Graph& g, float size, Vec3 t) {
+    Node* b = g.createNode("box");
+    for (int k = 0; k < 3; ++k) { b->parm("size")->val[k] = size; b->parm("t")->val[k] = t[k]; }
+    return b;
+}
+
+TEST(rbd_constraints) {
+    // pendulum: a 0.2 m box pinned to the world 1 m to its side swings down and across
+    {
+        Graph g;
+        Node* box = rbdBox(g, 0.2f, Vec3(0, 2, 0));
+        Node* cn = g.createNode("rbdconstraints");
+        g.connect(box, cn, 0);
+        cn->parm("connect")->val[0] = 2; cn->parm("anchors")->str = "0"; cn->parm("anchoroffset")->val[0] = 1;
+        g.cook(cn);
+        CHECK(cn->error().empty() && cn->geometry().numPrims() == 1);
+        const Attrib* pa = cn->geometry().findAttrib(AttribClass::Point, "piece");
+        CHECK(pa && pa->getF(0) == 0.f && pa->getF(1) == -1.f);
+        Node* r = g.createNode("rbdsolver");
+        g.connect(box, r, 0); g.connect(cn, r, 2);
+        r->parm("glue")->val[0] = 0;
+        float maxErr = 0, minX = 9, minY = 9;
+        int bottom = -1;
+        float prevX = 0;
+        for (int f = 1; f <= 40; ++f) {
+            g.frame = float(f); g.cook(r);
+            Vec3 c = rbdCenter(r->geometry(), 0, 8);
+            maxErr = std::max(maxErr, std::fabs(length(c - Vec3(1, 2, 0)) - 1));
+            minX = std::min(minX, c.x); minY = std::min(minY, c.y);
+            if (bottom < 0 && f > 1 && prevX < 1 && c.x >= 1) bottom = f;
+            prevX = c.x;
+        }
+        CHECK(r->error().empty() && r->warning().empty());
+        CHECK(maxErr < 0.005f);          // the rod length holds
+        CHECK(minY < 1.02f);             // swings through the bottom...
+        CHECK(minX < 0.08f);             // ...and up to the other side (energy kept)
+        // quarter period from 90 degrees: 1.18 * 2 pi sqrt(L / g) / 4 = 0.59 s, about 14 frames
+        CHECK(bottom >= 13 && bottom <= 17);
+    }
+    // chain: 6 boxes pinned in a row, the first to the world; links stay together as it swings
+    {
+        Graph g;
+        Node* box = rbdBox(g, 0.18f, Vec3(0));
+        Node* line = g.createNode("line");
+        line->parm("origin")->val[1] = 3; line->parm("dir")->val[0] = 1; line->parm("dir")->val[1] = 0;
+        line->parm("dist")->val[0] = 1; line->parm("points")->val[0] = 6;
+        Node* cp = g.createNode("copytopoints");
+        g.connect(box, cp, 0); g.connect(line, cp, 1);
+        Node* cn = g.createNode("rbdconstraints");
+        g.connect(cp, cn, 0);
+        cn->parm("connect")->val[0] = 1; cn->parm("anchors")->str = "first"; cn->parm("anchoroffset")->val[0] = -0.1f;
+        Node* r = g.createNode("rbdsolver");
+        g.connect(cp, r, 0); g.connect(cn, r, 2);
+        r->parm("glue")->val[0] = 0;
+        g.cook(cn);
+        CHECK(cn->geometry().numPrims() == 6); // 5 links + 1 world anchor
+        float worstLink = 0, lowest = 9;
+        for (int f = 2; f <= 30; ++f) {
+            g.frame = float(f); g.cook(r);
+            const Geometry& o = r->geometry();
+            for (int i = 0; i + 1 < 6; ++i)
+                worstLink = std::max(worstLink, std::fabs(length(rbdCenter(o, size_t(i) * 8, size_t(i + 1) * 8) - rbdCenter(o, size_t(i + 1) * 8, size_t(i + 2) * 8)) - 0.2f));
+            lowest = std::min(lowest, rbdCenter(o, 40, 48).y);
+        }
+        CHECK(r->error().empty());
+        CHECK(worstLink < 0.02f);   // links keep their spacing (pins at the midpoints)
+        CHECK(lowest < 2.1f);       // the free end swings down about a chain length
+    }
+    // spring: settles where k * extension = m g
+    {
+        Graph g;
+        Node* box = rbdBox(g, 0.2f, Vec3(0, 2, 0));
+        Node* cn = g.createNode("rbdconstraints");
+        g.connect(box, cn, 0);
+        cn->parm("connect")->val[0] = 2; cn->parm("anchors")->str = "0"; cn->parm("anchoroffset")->val[1] = 0.5f;
+        cn->parm("type")->val[0] = 2; cn->parm("stiffness")->val[0] = 400; cn->parm("damping")->val[0] = 10;
+        Node* r = g.createNode("rbdsolver");
+        g.connect(box, r, 0); g.connect(cn, r, 2);
+        r->parm("glue")->val[0] = 0;
+        g.frame = 200; g.cook(r);
+        float y = rbdCenter(r->geometry(), 0, 8).y;
+        CHECK(std::fabs(y - (2 - 8 * 9.81f / 400)) < 0.005f); // 8 kg box
+    }
+    // hinge: only turns about its axis; a motor drives it to its target speed
+    {
+        Graph g;
+        Node* box = rbdBox(g, 0.4f, Vec3(0.5f, 1, 0));
+        Node* cn = g.createNode("rbdconstraints");
+        g.connect(box, cn, 0);
+        cn->parm("connect")->val[0] = 2; cn->parm("anchors")->str = "0"; cn->parm("anchoroffset")->val[0] = -0.5f;
+        cn->parm("type")->val[0] = 1; cn->parm("axis")->val[1] = 1; cn->parm("axis")->val[2] = 0;
+        Node* motor = g.createNode("attribwrangle");
+        g.connect(cn, motor, 0);
+        motor->parm("class")->val[0] = 1;
+        motor->parm("snippet")->str = "@motorspeed = 3; @motortorque = 500;";
+        Node* r = g.createNode("rbdsolver");
+        g.connect(box, r, 0); g.connect(motor, r, 2);
+        r->parm("glue")->val[0] = 0; r->parm("gravity")->val[1] = 0; r->parm("ground")->val[0] = 0; r->parm("sleep")->val[0] = 0;
+        r->parm("initw")->val[0] = 2; r->parm("angdamp")->val[0] = 0;
+        float maxTilt = 0, maxPivot = 0;
+        std::vector<float> ang;
+        for (int f = 2; f <= 30; ++f) {
+            g.frame = float(f); g.cook(r);
+            Vec3 c = rbdCenter(r->geometry(), 0, 8);
+            maxTilt = std::max(maxTilt, std::fabs(c.y - 1));
+            maxPivot = std::max(maxPivot, std::fabs(length(Vec3(c.x, 0, c.z)) - 0.5f));
+            ang.push_back(std::atan2(-c.z, c.x));
+        }
+        CHECK(r->error().empty());
+        CHECK(maxTilt < 0.002f && maxPivot < 0.002f);
+        // angle advance per frame near the end: 3 rad/s / 24 fps = 0.125 rad (unwrap)
+        float d = ang[ang.size() - 1] - ang[ang.size() - 2];
+        while (d > 3.14159f) d -= 6.28318f;
+        while (d < -3.14159f) d += 6.28318f;
+        CHECK(std::fabs(std::fabs(d) - 0.125f) < 0.01f);
+    }
+    // breaking: a pin weaker than the box's weight (78 N) lets go, a stronger one holds
+    {
+        Graph g;
+        Node* box = rbdBox(g, 0.2f, Vec3(0, 2, 0));
+        Node* cn = g.createNode("rbdconstraints");
+        g.connect(box, cn, 0);
+        cn->parm("connect")->val[0] = 2; cn->parm("anchors")->str = "0"; cn->parm("anchoroffset")->val[1] = 0.3f;
+        cn->parm("breakforce")->val[0] = 40;
+        Node* r = g.createNode("rbdsolver");
+        g.connect(box, r, 0); g.connect(cn, r, 2);
+        r->parm("glue")->val[0] = 0; r->parm("showcons")->val[0] = 1;
+        g.frame = 48; g.cook(r);
+        CHECK(rbdCenter(r->geometry(), 0, 8).y < 0.2f);
+        const Attrib* cd = r->geometry().findAttrib(AttribClass::Prim, "Cd");
+        CHECK(cd && r->geometry().numPrims() == 7 && cd->getV(6).x > 0.5f); // the constraint line is shown red (broken)
+        cn->parm("breakforce")->val[0] = 200; cn->touch();
+        g.cook(r);
+        CHECK(std::fabs(rbdCenter(r->geometry(), 0, 8).y - 2) < 0.01f);
+    }
+    // bad constraint lines are reported, not fatal
+    {
+        Graph g;
+        Node* box = rbdBox(g, 0.2f, Vec3(0, 2, 0));
+        Node* bad = g.createNode("line"); // no piece attribute and far from any piece
+        bad->parm("origin")->val[1] = 10;
+        Node* r = g.createNode("rbdsolver");
+        g.connect(box, r, 0); g.connect(bad, r, 2);
+        g.frame = 5; g.cook(r);
+        CHECK(r->error().empty() && !r->warning().empty());
+    }
+}
+
+TEST(rbd_packed_pieces) {
+    // packed copies simulate exactly like real copies; the output stays packed
+    auto build = [](Graph& g, bool pack) {
+        Node* b = g.createNode("box");
+        for (int k = 0; k < 3; ++k) b->parm("size")->val[k] = 0.3f;
+        Node* line = g.createNode("line");
+        line->parm("origin")->val[1] = 1; line->parm("dir")->val[0] = 1; line->parm("dir")->val[1] = 0.3f;
+        line->parm("dist")->val[0] = 1.5f; line->parm("points")->val[0] = 4;
+        Node* cp = g.createNode("copytopoints");
+        g.connect(b, cp, 0); g.connect(line, cp, 1);
+        cp->parm("pack")->val[0] = pack ? 1.f : 0.f;
+        Node* r = g.createNode("rbdsolver");
+        g.connect(cp, r, 0);
+        r->parm("glue")->val[0] = 0; r->parm("initw")->val[2] = 3; r->parm("initv")->val[0] = 1;
+        return r;
+    };
+    Graph g1, g2;
+    Node* rp = build(g1, true);
+    Node* rr = build(g2, false);
+    for (int f : {12, 48}) {
+        g1.frame = float(f); g2.frame = float(f);
+        g1.cook(rp); g2.cook(rr);
+        CHECK(rp->error().empty() && rp->geometry().numPacked() == 4 && rp->geometry().numPoints() == 0);
+        Geometry u = rp->geometry();
+        u.unpack();
+        CHECK(u.numPoints() == rr->geometry().numPoints());
+        float worst = 0;
+        for (size_t i = 0; i < std::min(u.numPoints(), rr->geometry().numPoints()); ++i) worst = std::max(worst, length(u.P[i] - rr->geometry().P[i]));
+        CHECK(worst < 1e-4f);
+    }
+    Vec3 mn, mx;
+    rp->geometry().bounds(mn, mx);
+    CHECK(mn.y > -0.02f && mn.y < 0.05f); // landed on the ground
+    // fracture -> pack by piece -> RBD: still one packed prim per piece, all above the ground
+    Graph g;
+    Node* box = g.createNode("box");
+    box->parm("t")->val[1] = 1;
+    Node* fr = g.createNode("voronoifracture");
+    g.connect(box, fr, 0);
+    fr->parm("pieces")->val[0] = 12;
+    Node* pk = g.createNode("pack");
+    g.connect(fr, pk, 0);
+    pk->parm("pieceattrib")->str = "piece";
+    Node* r = g.createNode("rbdsolver");
+    g.connect(pk, r, 0);
+    r->parm("glue")->val[0] = 0;
+    g.frame = 40; g.cook(r);
+    CHECK(r->error().empty() && r->geometry().numPacked() == pk->geometry().numPacked() && r->geometry().numPacked() >= 10);
+    r->geometry().bounds(mn, mx);
+    if (!(mn.y > -0.05f && mx.y < 1.3f)) std::printf("  packed fracture bounds y %.3f .. %.3f\n", mn.y, mx.y);
+    CHECK(mn.y > -0.05f && mx.y < 1.3f); // fell from 1.5 m and settled on the ground
+}
+
 int main() {
     for (auto& t : tests()) {
         int before = g_failed;

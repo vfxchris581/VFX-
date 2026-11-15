@@ -5,6 +5,13 @@ what works, what is partial and what is planned.
 
 ## Unreleased
 
+Phase 10: rigid-body constraints and packed pieces.
+
+- RBD Solver constraint input: pin (ball joint), hinge (with motor) and spring constraints, breakable by force; pieces joined by a pin or hinge don't collide.
+- New RBD Constraints node: nearby pieces, chains, world anchors. "Show Constraints" draws them on the solver output.
+- Packed prims simulate as RBD pieces and stay packed.
+- New example: `wreckingball.hdg`.
+
 Phase 9: packed primitives and instancing.
 
 - Packed primitives: shared, transformable instances of geometry (nested packing allowed). Pack (whole input or one per piece) and Unpack nodes; Copy to Points has a "Pack and Instance" option.

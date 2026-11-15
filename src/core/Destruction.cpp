@@ -10,6 +10,12 @@
 //   * Contacts are found vertex-vs-hull (plus hull edge midpoints) between pieces of different bodies
 //     and against the ground plane, then solved with sequential impulses (accumulated, clamped normal
 //     impulses, Coulomb friction, restitution and Baumgarte position correction).
+//   * Constraints (input 3): two-point lines whose point "piece" attribute names the pieces they join
+//     (-1 = the world). Pin = ball joint, Hinge = ball joint + an axis both pieces keep (with an
+//     optional motor), both solved as velocity constraints in the same sequential-impulse loop as
+//     contacts; Spring = Hooke spring + damper between the two endpoints, applied as a force.
+//     Any constraint can break when its force exceeds "breakforce".
+//   * Packed prims in input 1 are pieces too; the output moves them by updating their transforms.
 //   * Resting bodies go to sleep and wake when touched or when they lose support.
 //   * Every simulated frame is cached; scrubbing back is instant and edits re-simulate.
 #include "Fracture.h"
@@ -19,6 +25,9 @@
 #include <functional>
 #include <map>
 #include <numeric>
+#include <cstdlib>
+#include <sstream>
+#include <set>
 
 namespace hd {
 namespace {
@@ -31,6 +40,12 @@ ParmDef I(const char* n, const char* l, int d, int mn = 0, int mx = 10, const ch
 }
 ParmDef T(const char* n, const char* l, bool d, const char* help = "") {
     ParmDef p; p.name = n; p.label = l; p.type = ParmType::Toggle; p.def[0] = d ? 1.f : 0.f; p.help = help; return p;
+}
+ParmDef S(const char* n, const char* l, const char* d = "", const char* help = "") {
+    ParmDef p; p.name = n; p.label = l; p.type = ParmType::String; p.defStr = d; p.help = help; return p;
+}
+ParmDef M(const char* n, const char* l, std::vector<std::string> items, int d = 0) {
+    ParmDef p; p.name = n; p.label = l; p.type = ParmType::Menu; p.menu = std::move(items); p.def[0] = float(d); return p;
 }
 ParmDef V(const char* n, const char* l, Vec3 d, float mn = -1, float mx = 1, const char* help = "") {
     ParmDef p; p.name = n; p.label = l; p.type = ParmType::Vec3; p.def[0] = d.x; p.def[1] = d.y; p.def[2] = d.z; p.min = mn; p.max = mx; p.help = help; return p;
@@ -107,6 +122,18 @@ struct Piece {
     std::vector<int> pts; // points of this piece in the rest geometry (dynamic pieces only)
     bool isStatic = false;
     Vec3 v0{0, 0, 0};    // initial velocity from the "v" point attribute
+    int packed = -1;     // index into the rest geometry's packed prims (a packed piece)
+};
+
+enum JointType { kPin = 0, kHinge = 1, kSpring = 2 };
+struct Joint {
+    int a = -1, b = -1;      // piece indices (b = -1: the world)
+    Vec3 la, lb;             // anchors: piece space (offset from com0); lb is a world point when b = -1
+    Vec3 axA, axB;           // hinge axis in each piece's space (world when b = -1)
+    int type = kPin;
+    float stiffness = 100, damping = 1, rest = 0;
+    float breakForce = 0;    // newtons; 0 = never breaks
+    float motorSpeed = 0, motorTorque = 0;
 };
 
 struct Body {
@@ -126,6 +153,7 @@ struct Body {
 struct SimFrame {
     std::vector<Body> bodies;
     std::vector<char> bondAlive;
+    std::vector<char> jointAlive;
 };
 
 struct RbdState {
@@ -136,6 +164,8 @@ struct RbdState {
     std::vector<Piece> pieces;       // dynamic first, then static collider pieces
     int numDynamic = 0;
     std::vector<std::pair<int, int>> bonds;
+    std::vector<Joint> joints;
+    std::set<std::pair<int, int>> jointPairs; // pieces joined by a pin or hinge don't collide
     std::map<int, SimFrame> frames;
 };
 
@@ -337,6 +367,54 @@ bool substep(const RbdState& st, SimFrame& fr, const SimParams& sp, std::vector<
     }
     auto movable = [&](int bi) { return bi >= 0 && !bodies[size_t(bi)].isStatic && !bodies[size_t(bi)].sleeping; };
 
+    // ---- joints: world anchors and the bodies they act on
+    struct JW { int A, B; Vec3 pA, pB, rA, rB; bool skip; };
+    std::vector<JW> jw(st.joints.size());
+    for (size_t j = 0; j < st.joints.size(); ++j) {
+        const Joint& J = st.joints[j];
+        JW& w = jw[j];
+        w.skip = !fr.jointAlive[j];
+        if (w.skip) continue;
+        const PW& WA = pw[size_t(J.a)];
+        w.A = WA.body;
+        w.pA = WA.pos + WA.R * J.la;
+        if (J.b >= 0) {
+            const PW& WB = pw[size_t(J.b)];
+            w.B = WB.body;
+            w.pB = WB.pos + WB.R * J.lb;
+        } else { w.B = -1; w.pB = J.lb; }
+        if (w.A == w.B) { w.skip = true; continue; } // glued into one body: already rigid
+        w.rA = w.pA - bodies[size_t(w.A)].x;
+        w.rB = w.B >= 0 ? w.pB - bodies[size_t(w.B)].x : Vec3(0);
+        // a moving body wakes whatever it is jointed to
+        Body& ba = bodies[size_t(w.A)];
+        if (w.B >= 0) {
+            Body& bb = bodies[size_t(w.B)];
+            bool am = !ba.isStatic && !ba.sleeping, bm = !bb.isStatic && !bb.sleeping;
+            if (am && bb.sleeping && !bb.isStatic) { bb.sleeping = false; bb.sleepTime = 0; }
+            if (bm && ba.sleeping && !ba.isStatic) { ba.sleeping = false; ba.sleepTime = 0; }
+        }
+    }
+    std::vector<float> jointForce(st.joints.size(), 0.f); // for breaking (N)
+    // springs: explicit Hooke force + damping along the line between the anchors
+    for (size_t j = 0; j < st.joints.size(); ++j) {
+        const Joint& J = st.joints[j];
+        const JW& w = jw[j];
+        if (w.skip || J.type != kSpring) continue;
+        Body& A = bodies[size_t(w.A)];
+        Vec3 d = w.pA - w.pB;
+        float len = length(d);
+        if (len < 1e-9f) continue;
+        Vec3 dir = d / len;
+        Vec3 va = A.v + cross(A.w, w.rA);
+        Vec3 vb = w.B >= 0 ? bodies[size_t(w.B)].v + cross(bodies[size_t(w.B)].w, w.rB) : Vec3(0);
+        float f = -J.stiffness * (len - J.rest) - J.damping * dot(va - vb, dir);
+        jointForce[j] = std::fabs(f);
+        Vec3 P = dir * (f * dt);
+        if (movable(w.A)) { A.v += P * A.invMass; A.w += worldInvInertia(A, false) * cross(w.rA, P); }
+        if (w.B >= 0 && movable(w.B)) { Body& B = bodies[size_t(w.B)]; B.v -= P * B.invMass; B.w -= worldInvInertia(B, false) * cross(w.rB, P); }
+    }
+
     // ---- contact generation
     contacts.clear();
     std::vector<int> touchCount(bodies.size(), 0);
@@ -374,6 +452,15 @@ bool substep(const RbdState& st, SimFrame& fr, const SimParams& sp, std::vector<
             const PW& WB = pw[size_t(B)];
             if (WB.pos.x - PB.radius > maxX) break;
             if (WA.body == WB.body) continue;
+            if (!st.jointPairs.empty() && st.jointPairs.count({std::min(A, B), std::max(A, B)})) {
+                // joined pieces skip contacts while the joint holds
+                bool holds = false;
+                for (size_t j = 0; j < st.joints.size() && !holds; ++j) {
+                    const Joint& J = st.joints[j];
+                    holds = fr.jointAlive[j] && J.type != kSpring && ((J.a == A && J.b == B) || (J.a == B && J.b == A));
+                }
+                if (holds) continue;
+            }
             const Body& ba = bodies[size_t(WA.body)];
             const Body& bb = bodies[size_t(WB.body)];
             bool aMov = !ba.isStatic && !ba.sleeping, bMov = !bb.isStatic && !bb.sleeping;
@@ -464,6 +551,95 @@ bool substep(const RbdState& st, SimFrame& fr, const SimParams& sp, std::vector<
     }
     contacts.swap(solve);
 
+    // ---- joint rows (pin / hinge): effective masses and position-error biases
+    struct JRow {
+        size_t j;
+        Mat3 Kinv;            // point constraint
+        Vec3 bias;
+        Vec3 t[2]; float kt[2], bt[2]; // hinge: two angular rows perpendicular to the axis
+        Vec3 ax; float kax;   // hinge motor row
+        Vec3 P{0}; float Pt[2] = {0, 0}, Pm = 0;
+        bool hinge, motor;
+    };
+    std::vector<JRow> jrows;
+    auto skew = [](const Vec3& r) { Mat3 m; m.m[0][1] = -r.z; m.m[0][2] = r.y; m.m[1][0] = r.z; m.m[1][2] = -r.x; m.m[2][0] = -r.y; m.m[2][1] = r.x; return m; };
+    for (size_t j = 0; j < st.joints.size(); ++j) {
+        const Joint& J = st.joints[j];
+        const JW& w = jw[j];
+        if (w.skip || J.type == kSpring) continue;
+        if (!movable(w.A) && !(w.B >= 0 && movable(w.B))) continue;
+        JRow r;
+        r.j = j;
+        const float ia = invM(w.A), ib = w.B >= 0 ? invM(w.B) : 0.f;
+        const Mat3 IA = movable(w.A) ? invI[size_t(w.A)] : Mat3();
+        const Mat3 IB = w.B >= 0 && movable(w.B) ? invI[size_t(w.B)] : Mat3();
+        Mat3 K = Mat3::identity();
+        for (int a = 0; a < 3; ++a) for (int b = 0; b < 3; ++b) K.m[a][b] *= ia + ib;
+        Mat3 SA = skew(w.rA), SB = skew(w.rB);
+        Mat3 tA = SA * IA * SA.transposed(), tB = SB * IB * SB.transposed();
+        K = K + tA + tB;
+        r.Kinv = K.inverse();
+        r.bias = (w.pA - w.pB) * (-beta / dt); // drive the anchors together
+        r.hinge = J.type == kHinge;
+        r.motor = false;
+        if (r.hinge) {
+            Vec3 aA = normalize(pw[size_t(J.a)].R * J.axA);
+            Vec3 aB = J.b >= 0 ? normalize(pw[size_t(J.b)].R * J.axB) : normalize(J.axB);
+            Vec3 tt = std::fabs(aA.x) < 0.57f ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
+            r.t[0] = normalize(cross(aA, tt));
+            r.t[1] = cross(aA, r.t[0]);
+            Vec3 err = cross(aA, aB); // small rotation that takes A's axis onto B's
+            for (int k = 0; k < 2; ++k) {
+                float den = dot(r.t[k], IA * r.t[k]) + dot(r.t[k], IB * r.t[k]);
+                r.kt[k] = den > 1e-20f ? 1.f / den : 0.f;
+                r.bt[k] = std::clamp(beta / dt * dot(err, r.t[k]), -maxBias * 4, maxBias * 4);
+            }
+            if (J.motorTorque > 0) {
+                r.motor = true;
+                r.ax = aA;
+                float den = dot(aA, IA * aA) + dot(aA, IB * aA);
+                r.kax = den > 1e-20f ? 1.f / den : 0.f;
+            }
+        }
+        jrows.push_back(r);
+    }
+    auto solveJoints = [&]() {
+        for (JRow& r : jrows) {
+            const Joint& J = st.joints[r.j];
+            const JW& w = jw[r.j];
+            Body& A = bodies[size_t(w.A)];
+            Body* B = w.B >= 0 ? &bodies[size_t(w.B)] : nullptr;
+            const bool am = movable(w.A), bm = B && movable(w.B);
+            const Mat3 IA = am ? invI[size_t(w.A)] : Mat3();
+            const Mat3 IB = bm ? invI[size_t(w.B)] : Mat3();
+            auto angular = [&](const Vec3& L) { // apply angular impulse L to A, -L to B
+                if (am) A.w += IA * L;
+                if (bm) B->w -= IB * L;
+            };
+            if (r.hinge) {
+                for (int k = 0; k < 2; ++k) {
+                    Vec3 wrel = A.w - (B ? B->w : Vec3(0));
+                    float lam = (r.bt[k] - dot(r.t[k], wrel)) * r.kt[k];
+                    r.Pt[k] += lam;
+                    angular(r.t[k] * lam);
+                }
+                if (r.motor) {
+                    Vec3 wrel = A.w - (B ? B->w : Vec3(0));
+                    float lam = (J.motorSpeed - dot(r.ax, wrel)) * r.kax;
+                    float lim = J.motorTorque * dt, old = r.Pm;
+                    r.Pm = std::clamp(old + lam, -lim, lim);
+                    angular(r.ax * (r.Pm - old));
+                }
+            }
+            Vec3 va = A.v + cross(A.w, w.rA);
+            Vec3 vb = B ? B->v + cross(B->w, w.rB) : Vec3(0);
+            Vec3 lam = r.Kinv * (r.bias - (va - vb));
+            r.P += lam;
+            if (am) { A.v += lam * A.invMass; A.w += IA * cross(w.rA, lam); }
+            if (bm) { B->v -= lam * B->invMass; B->w -= IB * cross(w.rB, lam); }
+        }
+    };
+
     // ---- sequential impulses
     auto apply = [&](const Contact& c, const Vec3& P) {
         if (movable(c.a)) { Body& A = bodies[size_t(c.a)]; A.v += P * A.invMass; A.w += invI[size_t(c.a)] * cross(c.ra, P); }
@@ -491,7 +667,13 @@ bool substep(const RbdState& st, SimFrame& fr, const SimParams& sp, std::vector<
             c.Pt2 = std::clamp(o2 + l2, -lim, lim);
             apply(c, c.t1 * (c.Pt1 - o1) + c.t2 * (c.Pt2 - o2));
         }
+        solveJoints();
     }
+    for (const JRow& r : jrows) // impulse over the substep -> force
+        jointForce[r.j] = std::max(jointForce[r.j], length(r.P) / dt);
+    // ---- breaking joints
+    for (size_t j = 0; j < st.joints.size(); ++j)
+        if (fr.jointAlive[j] && st.joints[j].breakForce > 0 && jointForce[j] > st.joints[j].breakForce) fr.jointAlive[j] = 0;
 
     // ---- glue breaking: impulse per piece vs strength * mass
     bool broke = false;
@@ -564,11 +746,14 @@ void cookRbd(CookContext& c) {
         const Attrib* vA = in0.findAttrib(AttribClass::Point, "v");
         if (vA && vA->tuple != 3) vA = nullptr;
         int skipped = 0;
+        std::vector<int> polyPieceMap;
         for (auto& prims : pieces) {
+            polyPieceMap.push_back(-1);
             Geometry pg = in0.extractPrims(prims);
             if (pg.numPoints() == 0) continue;
             Piece p;
             if (!makePiece(pg, density, p)) { ++skipped; continue; }
+            polyPieceMap.back() = int(st.pieces.size());
             float actSum = 0, n = float(pg.numPoints());
             Vec3 v0(0);
             const Attrib* pa = pg.findAttrib(AttribClass::Point, "active");
@@ -587,6 +772,19 @@ void cookRbd(CookContext& c) {
                         if (!seen[size_t(v)]) { seen[size_t(v)] = 1; p.pts.push_back(v); }
                     }
             }
+            st.pieces.push_back(std::move(p));
+        }
+        // input piece number -> solver piece (constraints refer to input numbering: connected parts
+        // in prim order, then packed prims)
+        std::vector<int> inputPiece = polyPieceMap;
+        for (size_t pi = 0; pi < in0.packed.size(); ++pi) {
+            Geometry one;
+            one.packed.push_back(in0.packed[pi]);
+            one.unpack();
+            Piece p;
+            if (one.numPoints() == 0 || !makePiece(one, density, p)) { ++skipped; inputPiece.push_back(-1); continue; }
+            p.packed = int(pi);
+            inputPiece.push_back(int(st.pieces.size()));
             st.pieces.push_back(std::move(p));
         }
         st.numDynamic = int(st.pieces.size());
@@ -618,6 +816,64 @@ void cookRbd(CookContext& c) {
                     if (touching >= 3) st.bonds.push_back({a, b});
                 }
         }
+        // constraint network (input 3)
+        Geometry cons;
+        if (c.hasInput(2) && c.inputAtFrame(2, float(start), cons)) {
+            const Attrib* pieceA = cons.findAttrib(AttribClass::Point, "piece");
+            auto primF = [&](const char* n, size_t pi, float def) {
+                const Attrib* a = cons.findAttrib(AttribClass::Prim, n);
+                return a ? a->getF(pi) : def;
+            };
+            const Attrib* axisA = cons.findAttrib(AttribClass::Prim, "axis");
+            int bad = 0;
+            // nearest dynamic piece to a point (for networks without a piece attribute)
+            auto nearestPiece = [&](const Vec3& p) {
+                int best = -1;
+                float bd = 1e30f;
+                for (int k = 0; k < st.numDynamic; ++k) {
+                    float d = st.pieces[size_t(k)].hull.distance(p - st.pieces[size_t(k)].com0);
+                    if (d < bd) { bd = d; best = k; }
+                }
+                return bd <= 0.05f ? best : -1;
+            };
+            for (size_t pi = 0; pi < cons.numPrims(); ++pi) {
+                const Prim& pr = cons.prims[pi];
+                if (pr.count != 2) { ++bad; continue; }
+                const int ia = cons.vertices[size_t(pr.start)], ib = cons.vertices[size_t(pr.start + 1)];
+                auto solverPiece = [&](int pt) {
+                    if (!pieceA) return nearestPiece(cons.P[size_t(pt)]);
+                    int id = int(std::lround(pieceA->getF(size_t(pt))));
+                    if (id < 0) return -1;
+                    return id < int(inputPiece.size()) ? inputPiece[size_t(id)] : -2;
+                };
+                int a = solverPiece(ia), b = solverPiece(ib);
+                if (a == -2 || b == -2 || (a < 0 && b < 0) || a == b) { ++bad; continue; }
+                Vec3 PA = cons.P[size_t(ia)], PB = cons.P[size_t(ib)];
+                if (a < 0) { std::swap(a, b); std::swap(PA, PB); } // the world, if any, is side b
+                Joint J;
+                J.type = std::clamp(int(std::lround(primF("constrainttype", pi, float(c.i("ctype"))))), 0, 2);
+                J.a = a; J.b = b;
+                J.stiffness = std::max(0.f, primF("stiffness", pi, c.f("cstiffness")));
+                J.damping = std::max(0.f, primF("damping", pi, c.f("cdamping")));
+                J.breakForce = std::max(0.f, primF("breakforce", pi, c.f("cbreak")));
+                J.motorSpeed = primF("motorspeed", pi, 0.f);
+                J.motorTorque = std::max(0.f, primF("motortorque", pi, 0.f));
+                Vec3 axis = axisA && axisA->tuple == 3 ? axisA->getV(pi) : c.v("caxis");
+                if (length(axis) < 1e-6f) axis = Vec3(0, 0, 1);
+                axis = normalize(axis);
+                // pin/hinge pivot: the world end, or the middle of the line; springs join the two ends
+                Vec3 pivot = b < 0 ? PB : (PA + PB) * 0.5f;
+                Vec3 anchorA = J.type == kSpring ? PA : pivot, anchorB = J.type == kSpring ? PB : pivot;
+                J.la = anchorA - st.pieces[size_t(a)].com0;
+                J.lb = b >= 0 ? anchorB - st.pieces[size_t(b)].com0 : anchorB;
+                J.axA = axis; J.axB = axis; // piece space == world space at the start frame
+                J.rest = length(PA - PB) * std::max(0.f, primF("restscale", pi, 1.f));
+                if (st.pieces[size_t(a)].isStatic && (b < 0 || st.pieces[size_t(b)].isStatic)) { ++bad; continue; }
+                st.joints.push_back(J);
+                if (J.type != kSpring && b >= 0) st.jointPairs.insert({std::min(a, b), std::max(a, b)});
+            }
+            if (bad) c.warning(std::to_string(bad) + " constraint(s) ignored (need 2 points joining two different pieces, or a piece and the world).");
+        }
         st.setupOk = true;
         c.clearEvalFrame();
     }
@@ -635,6 +891,16 @@ void cookRbd(CookContext& c) {
                     const Piece& p = st.pieces[size_t(m)];
                     Vec3 pos = b.x + b.q.rotate(b.offset[k]);
                     Quat q = b.q * b.rot[k];
+                    if (p.packed >= 0) { // move the instance: rest -> about com0 -> rotate -> place
+                        Mat3 R = q.matrix();
+                        Mat4 M;
+                        for (int r2 = 0; r2 < 3; ++r2)
+                            for (int c2 = 0; c2 < 3; ++c2) M.at(r2, c2) = R.m[r2][c2];
+                        M.at(0, 3) = pos.x; M.at(1, 3) = pos.y; M.at(2, 3) = pos.z;
+                        PackedPrim& pk = g.packed[size_t(p.packed)];
+                        pk.xform = M * Mat4::translate(-p.com0) * st.rest.packed[size_t(p.packed)].xform;
+                        continue;
+                    }
                     for (int i : p.pts) {
                         Vec3 local = g.P[size_t(i)] - p.com0;
                         Vec3 w = pos + q.rotate(local);
@@ -654,6 +920,33 @@ void cookRbd(CookContext& c) {
                         }
             }
         }
+        if (c.b("showcons") && !st.joints.empty()) {
+            // constraint lines between the current anchors: green intact, red broken (springs show both ends)
+            std::vector<Vec3> pos(st.pieces.size());
+            std::vector<Quat> ori(st.pieces.size());
+            for (size_t m = 0; m < st.pieces.size(); ++m) pos[m] = st.pieces[m].com0;
+            if (fr)
+                for (auto& b : fr->bodies)
+                    for (size_t k = 0; k < b.members.size(); ++k) {
+                        pos[size_t(b.members[k])] = b.x + b.q.rotate(b.offset[k]);
+                        ori[size_t(b.members[k])] = b.q * b.rot[k];
+                    }
+            Geometry lines;
+            Attrib& cd = lines.addAttrib(AttribClass::Prim, "Cd", 3, Vec3(1));
+            for (size_t j = 0; j < st.joints.size(); ++j) {
+                const Joint& J = st.joints[j];
+                Vec3 a = pos[size_t(J.a)] + ori[size_t(J.a)].rotate(J.la);
+                Vec3 bb = J.b >= 0 ? pos[size_t(J.b)] + ori[size_t(J.b)].rotate(J.lb) : J.lb;
+                Vec3 ca = pos[size_t(J.a)], cb = J.b >= 0 ? pos[size_t(J.b)] : J.lb;
+                int p0 = lines.addPoint(ca), p1 = lines.addPoint(J.type == kSpring ? a : (a + bb) * 0.5f), p2 = lines.addPoint(cb);
+                (void)bb;
+                lines.addPrim({p0, p1, p2}, false);
+                cd.resize(lines.numPrims());
+                bool alive = !fr || fr->jointAlive[j];
+                cd.setV(lines.numPrims() - 1, alive ? Vec3(0.2f, 0.95f, 0.35f) : Vec3(0.95f, 0.2f, 0.15f));
+            }
+            g.merge(lines);
+        }
         c.out = std::move(g);
     };
 
@@ -671,6 +964,7 @@ void cookRbd(CookContext& c) {
         have = start;
         c.setEvalFrame(float(start));
         cur.bondAlive.assign(st.bonds.size(), 1);
+        cur.jointAlive.assign(st.joints.size(), 1);
         cur.bodies = buildBodies(st, cur.bondAlive, nullptr, c.v("initv"), c.v("initw"));
         c.clearEvalFrame();
     }
@@ -744,7 +1038,127 @@ void cookVoronoi(CookContext& c) {
 
 } // namespace
 
+// Centres of the pieces the RBD Solver sees, in its input numbering: connected parts (prim order),
+// then packed prims.
+std::vector<Vec3> pieceCenters(const Geometry& g) {
+    std::vector<Vec3> out;
+    for (auto& prims : findPieces(g)) {
+        std::vector<char> seen(g.numPoints(), 0);
+        Vec3 sum(0);
+        int n = 0;
+        for (int pr : prims)
+            for (int k = 0; k < g.prims[size_t(pr)].count; ++k) {
+                int v = g.primVertex(pr, k);
+                if (seen[size_t(v)]) continue;
+                seen[size_t(v)] = 1;
+                sum += g.P[size_t(v)];
+                ++n;
+            }
+        out.push_back(n ? sum / float(n) : Vec3(0));
+    }
+    for (const PackedPrim& pk : g.packed) {
+        Vec3 c = pk.xform.transformPoint(Vec3(0));
+        if (pk.geo && pk.geo->numPoints()) {
+            Vec3 mn, mx;
+            pk.geo->bounds(mn, mx);
+            c = pk.xform.transformPoint((mn + mx) * 0.5f);
+        }
+        out.push_back(c);
+    }
+    return out;
+}
+
+void cookRbdConstraints(CookContext& c) {
+    const Geometry& in = c.input(0);
+    const std::vector<Vec3> ctr = pieceCenters(in);
+    const int n = int(ctr.size());
+    Geometry& g = c.out;
+    Attrib& pa = g.addAttrib(AttribClass::Point, "piece", 1);
+    Attrib& ty = g.addAttrib(AttribClass::Prim, "constrainttype", 1);
+    Attrib& st = g.addAttrib(AttribClass::Prim, "stiffness", 1);
+    Attrib& dm = g.addAttrib(AttribClass::Prim, "damping", 1);
+    Attrib& br = g.addAttrib(AttribClass::Prim, "breakforce", 1);
+    Attrib& ax = g.addAttrib(AttribClass::Prim, "axis", 3);
+    const int type = c.i("type");
+    const Vec3 axis = c.v("axis");
+    auto addLine = [&](const Vec3& a, int ia, const Vec3& b, int ib) {
+        int p0 = g.addPoint(a), p1 = g.addPoint(b);
+        pa.resize(g.numPoints());
+        pa.setF(size_t(p0), float(ia));
+        pa.setF(size_t(p1), float(ib));
+        g.addPrim({p0, p1}, false);
+        size_t k = g.numPrims() - 1;
+        for (Attrib* a2 : {&ty, &st, &dm, &br, &ax}) a2->resize(g.numPrims());
+        ty.setF(k, float(type));
+        st.setF(k, c.f("stiffness"));
+        dm.setF(k, c.f("damping"));
+        br.setF(k, c.f("breakforce"));
+        ax.setV(k, axis);
+    };
+    const int mode = c.i("connect");
+    if (mode == 1) { // chain: piece i to i + 1
+        for (int i = 0; i + 1 < n; ++i) addLine(ctr[size_t(i)], i, ctr[size_t(i + 1)], i + 1);
+    } else if (mode == 0) { // nearby pieces
+        const float maxd = std::max(0.f, c.f("maxdist"));
+        const int maxc = std::max(1, c.i("maxconn"));
+        if (size_t(n) * size_t(n) > 25000000u) { c.error("Too many pieces for Nearby Pieces (over 5000)."); return; }
+        std::set<std::pair<int, int>> made;
+        for (int i = 0; i < n; ++i) {
+            std::vector<std::pair<float, int>> cand;
+            for (int j = 0; j < n; ++j)
+                if (j != i) {
+                    float d = length(ctr[size_t(i)] - ctr[size_t(j)]);
+                    if (d <= maxd) cand.push_back({d, j});
+                }
+            std::sort(cand.begin(), cand.end());
+            if (int(cand.size()) > maxc) cand.resize(size_t(maxc));
+            for (auto& [d, j] : cand)
+                if (made.insert({std::min(i, j), std::max(i, j)}).second) addLine(ctr[size_t(i)], i, ctr[size_t(j)], j);
+        }
+    }
+    // world anchors
+    std::string list = c.s("anchors");
+    for (char& ch : list) if (ch == ',') ch = ' ';
+    std::istringstream ss(list);
+    std::string tok;
+    int badTok = 0;
+    while (ss >> tok) {
+        int id;
+        if (tok == "last") id = n - 1;
+        else if (tok == "first") id = 0;
+        else {
+            char* end = nullptr;
+            long v = std::strtol(tok.c_str(), &end, 10);
+            if (!end || *end) { ++badTok; continue; }
+            id = int(v);
+        }
+        if (id < 0 || id >= n) { ++badTok; continue; }
+        addLine(ctr[size_t(id)], id, ctr[size_t(id)] + c.v("anchoroffset"), -1);
+    }
+    if (badTok) c.warning(std::to_string(badTok) + " world anchor entr" + (badTok == 1 ? "y is" : "ies are") + " not a piece number (0.." + std::to_string(n - 1) + ", first or last).");
+}
+
 void registerDestructionNodes(std::vector<NodeType>& types) {
+    {
+        NodeType t; t.name = "rbdconstraints"; t.label = "RBD Constraints"; t.category = "Destruction";
+        t.description = "Builds a constraint network for the RBD Solver's third input: lines between nearby pieces or a chain, plus world anchors.";
+        t.minInputs = 1; t.maxInputs = 1;
+        t.inputLabels = {"Pieces (the same geometry as the RBD Solver's first input)"};
+        t.parms = {
+            M("connect", "Connect", {"Nearby Pieces", "Chain (piece i to i+1)", "World Anchors Only"}, 0),
+            F("maxdist", "Max Distance", 1, 0, 10, "Nearby Pieces: join pieces whose centres are this close"),
+            I("maxconn", "Max Connections per Piece", 4, 1, 20),
+            M("type", "Type", {"Pin", "Hinge", "Spring"}, 0),
+            V("axis", "Hinge Axis", Vec3(0, 0, 1), -1, 1),
+            F("stiffness", "Spring Stiffness (N/m)", 400, 0, 10000),
+            F("damping", "Spring Damping (N s/m)", 5, 0, 500),
+            F("breakforce", "Break Force (N)", 0, 0, 100000, "0 = never breaks"),
+            S("anchors", "World Anchors", "", "Piece numbers pinned to the world (for example '0 7' or 'first last')"),
+            V("anchoroffset", "Anchor Offset", Vec3(0, 0, 0), -5, 5, "World anchor position relative to the piece centre"),
+        };
+        t.cook = cookRbdConstraints;
+        types.push_back(t);
+    }
     {
         NodeType t; t.name = "voronoifracture"; t.label = "Voronoi Fracture"; t.category = "Destruction";
         t.description = "Cuts a closed mesh into Voronoi pieces around points. Cut faces get inside=1 and their own color; every piece gets a piece number.";
@@ -763,8 +1177,9 @@ void registerDestructionNodes(std::vector<NodeType>& types) {
     {
         NodeType t; t.name = "rbdsolver"; t.label = "RBD Solver"; t.category = "Destruction";
         t.description = "Rigid body dynamics: pieces collide, bounce and pile up. Touching pieces are glued and break apart on impact.";
-        t.minInputs = 1; t.maxInputs = 2;
-        t.inputLabels = {"Pieces (each connected part; point v and active are read)", "Static collider (optional)"};
+        t.minInputs = 1; t.maxInputs = 3;
+        t.inputLabels = {"Pieces (each connected part or packed prim; point v and active are read)", "Static collider (optional)",
+                         "Constraints (optional): 2-point lines with a point 'piece' attribute (-1 = world)"};
         t.timeDependent = true;
         t.parms = {
             I("startframe", "Start Frame", 1, 1, 240),
@@ -785,7 +1200,16 @@ void registerDestructionNodes(std::vector<NodeType>& types) {
             F("lindamp", "Linear Damping", 0.02f, 0, 2),
             F("angdamp", "Angular Damping", 0.1f, 0, 2),
             T("sleep", "Sleep Resting Pieces", true),
+            M("ctype", "Constraint Type", {"Pin", "Hinge", "Spring"}, 0),
+            V("caxis", "Hinge Axis", Vec3(0, 0, 1), -1, 1, "Used when the constraint lines have no 'axis' prim attribute"),
+            F("cstiffness", "Spring Stiffness (N/m)", 400, 0, 10000),
+            F("cdamping", "Spring Damping (N s/m)", 5, 0, 500),
+            F("cbreak", "Break Force (N)", 0, 0, 100000, "Constraints break when their force exceeds this; 0 = never"),
+            T("showcons", "Show Constraints", false, "Draw the constraints as lines (green intact, red broken)"),
         };
+        for (auto& p : t.parms)
+            if (p.name == "ctype" || p.name == "caxis" || p.name == "cstiffness" || p.name == "cdamping" || p.name == "cbreak")
+                if (p.help.empty()) p.help = "Default for constraint lines without a matching prim attribute (constrainttype 0 pin, 1 hinge, 2 spring; stiffness, damping, breakforce, axis, motorspeed, motortorque, restscale)";
         t.cook = cookRbd;
         types.push_back(t);
     }
