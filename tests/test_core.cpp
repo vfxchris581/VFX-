@@ -2705,7 +2705,7 @@ TEST(rbd_packed_pieces) {
         CHECK(worst < 1e-4f);
     }
     Vec3 mn, mx;
-    rp->geometry().bounds(mn, mx);
+    { Geometry u = rp->geometry(); u.unpack(); u.bounds(mn, mx); }
     CHECK(mn.y > -0.02f && mn.y < 0.05f); // landed on the ground
     // fracture -> pack by piece -> RBD: still one packed prim per piece, all above the ground
     Graph g;
@@ -2722,7 +2722,7 @@ TEST(rbd_packed_pieces) {
     r->parm("glue")->val[0] = 0;
     g.frame = 40; g.cook(r);
     CHECK(r->error().empty() && r->geometry().numPacked() == pk->geometry().numPacked() && r->geometry().numPacked() >= 10);
-    r->geometry().bounds(mn, mx);
+    { Geometry u = r->geometry(); u.unpack(); u.bounds(mn, mx); } // exact (packed bounds are conservative boxes)
     if (!(mn.y > -0.05f && mx.y < 1.3f)) std::printf("  packed fracture bounds y %.3f .. %.3f\n", mn.y, mx.y);
     CHECK(mn.y > -0.05f && mx.y < 1.3f); // fell from 1.5 m and settled on the ground
 }
