@@ -1,0 +1,97 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 30,
+  "nodes": [
+    {
+      "inputs": [],
+      "name": "water_block",
+      "parms": {
+        "size": [1, 1.20000005, 1.20000005],
+        "t": [-1.45000005, 0.600000024, 0]
+      },
+      "type": "box",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": [],
+      "name": "obstacle",
+      "parms": {
+        "size": [0.300000012, 0.5, 0.400000006],
+        "t": [0.600000024, 0.25, 0]
+      },
+      "type": "box",
+      "x": 220,
+      "y": 0
+    },
+    {
+      "inputs": ["water_block", "obstacle"],
+      "name": "flip",
+      "parms": {
+        "domaincenter": [0, 0.75, 0],
+        "domainsize": [4, 1.5, 1.20000005],
+        "voxelsize": 0.0500000007
+      },
+      "type": "flipsolver",
+      "x": 0,
+      "y": 92
+    },
+    {
+      "inputs": ["flip"],
+      "name": "surface",
+      "parms": {
+        "smooth": 4
+      },
+      "type": "particlefluidsurface",
+      "x": 0,
+      "y": 184
+    },
+    {
+      "inputs": ["surface"],
+      "name": "water_material",
+      "parms": {
+        "color": [0.150000006, 0.449999988, 0.850000024],
+        "rough": 0.0799999982,
+        "setcolor": 1
+      },
+      "type": "material",
+      "x": 0,
+      "y": 276
+    },
+    {
+      "inputs": ["water_material", "obstacle", null, null, null, null, null, null],
+      "name": "merge",
+      "parms": {},
+      "type": "merge",
+      "x": 0,
+      "y": 368
+    },
+    {
+      "inputs": ["merge"],
+      "name": "OUT",
+      "parms": {},
+      "type": "null",
+      "x": 0,
+      "y": 460
+    }
+  ],
+  "range": [1, 120],
+  "render": {
+    "bounces": 4,
+    "camera": [0, 0.400000006, 0, 20, 28, 6, 45],
+    "curveWidth": 0.0120000001,
+    "exposure": 1,
+    "ground": true,
+    "groundY": 0,
+    "height": 540,
+    "samples": 64,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

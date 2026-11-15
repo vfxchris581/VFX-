@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(HD VERSION 0.2.0 LANGUAGES C CXX)
+project(HD VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -18,6 +18,7 @@ add_library(hd_core STATIC
   src/core/Demo.cpp
   src/core/Destruction.cpp
   src/core/Expr.cpp
+  src/core/Fluids.cpp
   src/core/Fracture.cpp
   src/core/GeoIO.cpp
   src/core/Geometry.cpp
@@ -30,6 +31,7 @@ add_library(hd_core STATIC
   src/core/PathTracer.cpp
   src/core/Pyro.cpp
   src/core/Sim.cpp
+  src/core/Vellum.cpp
   src/core/Volume.cpp
 )
 target_include_directories(hd_core PUBLIC src)

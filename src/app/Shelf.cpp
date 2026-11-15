@@ -252,6 +252,10 @@ void App::drawShelf() {
     static const Tool particles[] = {{"POP Solver", "popsolver", "Particles emitted from the selected node"}, {"Trail", "trail", "Streaks behind particles"}};
     static const Tool destruction[] = {{"Voronoi Fracture", "voronoifracture", "Break the selected mesh into pieces"},
                                        {"RBD Solver", "rbdsolver", "Rigid body simulation of the selected pieces (glued until hit)"}};
+    static const Tool fluids[] = {{"FLIP Solver", "flipsolver", "Liquid simulation filled from the selected closed mesh"},
+                                  {"Fluid Surface", "particlefluidsurface", "Mesh the selected fluid particles"},
+                                  {"Ocean", "ocean", "Animated, wind-driven ocean surface"}};
+    static const Tool vellum[] = {{"Vellum Solver", "vellumsolver", "Cloth, ropes, hair or soft bodies from the selected geometry"}};
     static const Tool pyro[] = {{"Pyro Solver", "pyrosolver", "Smoke / fire from the selected node"}, {"Fog Volume", "fogvolume", "Fill the selected mesh with fog"}};
 
     auto tools = [&](const Tool* list, size_t n) {
@@ -274,6 +278,8 @@ void App::drawShelf() {
         if (ImGui::BeginTabItem("Particles")) { tools(particles, std::size(particles)); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Pyro FX")) { tools(pyro, std::size(pyro)); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Rigid Bodies")) { tools(destruction, std::size(destruction)); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Fluids")) { tools(fluids, std::size(fluids)); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Vellum")) { tools(vellum, std::size(vellum)); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
     ImGui::End();

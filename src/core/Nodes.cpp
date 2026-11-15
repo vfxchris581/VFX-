@@ -12,6 +12,8 @@ void registerSimNodes(std::vector<NodeType>& types);    // Sim.cpp
 void registerVolumeNodes(std::vector<NodeType>& types); // Pyro.cpp
 void registerLightNodes(std::vector<NodeType>& types);  // Lights.cpp
 void registerDestructionNodes(std::vector<NodeType>& types); // Destruction.cpp
+void registerFluidNodes(std::vector<NodeType>& types);       // Fluids.cpp
+void registerVellumNodes(std::vector<NodeType>& types);      // Vellum.cpp
 namespace {
 
 // ---- parameter builders
@@ -940,6 +942,8 @@ std::vector<NodeType> buildTypes() {
     registerVolumeNodes(types);
     registerLightNodes(types);
     registerDestructionNodes(types);
+    registerFluidNodes(types);
+    registerVellumNodes(types);
     return types;
 }
 

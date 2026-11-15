@@ -4,14 +4,14 @@ HD is a node-based procedural 3D program in the spirit of Houdini. It's a native
 
 ![HD with an animated wrangle network](docs/screenshot-ripples.png)
 
-So far it has the **procedural core** (geometry engine, node graph, a VEX-like snippet language, viewport, Houdini-style UI), a **particle system** (POP solver), **smoke and fire** (Pyro solver with volume rendering), **destruction** (Voronoi Fracture and an RBD solver with breakable glue), and a **path-traced Render View** that saves images and sequences.
+So far it has the **procedural core** (geometry engine, node graph, a VEX-like snippet language, viewport, Houdini-style UI), a **particle system** (POP solver), **smoke and fire** (Pyro solver with volume rendering), **destruction** (Voronoi Fracture and an RBD solver with breakable glue), **liquids** (FLIP solver, fluid meshing and an ocean), **Vellum** (cloth, ropes, hair and pressure soft bodies), and a **path-traced Render View** that saves images and sequences.
 
 [STATUS.md](STATUS.md) lists what's working, what's partial and what's still planned, measured against the full product spec.
 
 ## Features
 
 - **Network editor.** Nodes flow top to bottom as in Houdini. Press **Tab** (or right-click) to open a searchable node menu. Drag from an output to an input to connect; drag a wire onto empty space to add a node that's already connected. The **blue flag** sets the display node and the **yellow flag** bypasses a node. Also: box select, duplicate, rename, error badges and per-node cook stats.
-- **45 nodes**:
+- **49 nodes**:
   - Generators: Box, Sphere, Grid, Tube, Torus, Circle, Line, File (OBJ)
   - Modifiers: Transform, Merge, Subdivide (Catmull-Clark), PolyExtrude, Fuse, Facet, Reverse, Blast, PolyWire
   - Deformers: Mountain (fractal noise), Smooth, Peak, Point Jitter
@@ -21,11 +21,15 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
   - Lights and Cameras: Camera, Point Light, Spot Light, Area Light, Distant Light, Environment Light
   - Simulation: POP Solver, Trail, Pyro Solver
   - Destruction: Voronoi Fracture, RBD Solver
+  - Fluids: FLIP Solver, Particle Fluid Surface, Ocean
+  - Vellum: Vellum Solver
   - Volumes: Fog Volume
 - **VEX-lite.** A small snippet language for Attribute Wrangle, expression groups and parameter expressions. It supports `@P`, `@N`, `@Cd`, `v@foo`/`f@foo`, `@ptnum`, `@Time`, `@Frame`, `if`/`for`, vector math, `noise`, `curlnoise`, `rand`, `fit`, `hsvtorgb` and more.
 - **Particles.** The POP Solver emits from any surface or point set (continuous or a single burst) and simulates frame by frame: gravity, wind, air resistance, curl-noise turbulence, ground and sphere collisions (bounce, stick or die), and color and size over life. A **POP wrangle** snippet runs every substep with `@v`, `@age`, `@life`, `@id` and `@TimeInc`. Simulated frames are cached, so scrubbing back is instant; the blue bar on the timeline shows what's cached. Changing the solver or anything upstream re-simulates. Trail turns velocities into streaks.
 - **Smoke and fire.** The Pyro Solver is a grid fluid simulation. Smoke is emitted from any closed mesh (or points), rises with buoyancy, swirls (vorticity confinement plus curl-noise turbulence), fades and cools, and flows around an optional collider mesh. Turn up **Fire Intensity** to make hot gas glow. Frames are cached like particles. Fog Volume fills a mesh with static fog. Volumes are raymarched in the viewport with self-shadowing and are correctly hidden behind solid geometry. Volumes follow Transform (move and scale, not rotate) and Merge; they aren't written by OBJ/PLY export.
 - **Destruction.** **Voronoi Fracture** cuts any closed mesh into pieces around the points on its second input, or around random points inside it. Cut faces are closed off (with holes where needed, so a torus works), get `inside = 1` and their own color, and every piece gets a `piece` number. The **RBD Solver** simulates the pieces as rigid bodies. Each connected part is a piece that collides as its convex hull, with mass and spin inertia from its volume. Pieces bounce, slide with friction, pile up and fall asleep when they come to rest. Pieces that touch at the start are glued and move as one until an impact is stronger than **Glue Strength**. Part of the impact passes on to glued neighbors (**Impact Propagation**), so a hit cracks a region rather than a single piece. A `v` point attribute gives a piece its starting velocity (useful for projectiles), `active = 0` pins a piece in place, and the second input takes static colliders. Frames are cached like the other solvers. Try **File → Open Example → destruction**.
+- **Liquids.** The **FLIP Solver** fills a closed source mesh with particles (eight per voxel) and simulates them as an incompressible liquid inside a box container. Each substep transfers particle velocities to a staggered grid, applies gravity and viscosity, removes divergence with a pressure solve (preconditioned conjugate gradient), and blends the change back onto the particles (**FLIP Ratio**: 1 is lively, 0 is calm). A **Particle Separation** pass keeps particles from bunching up, so the liquid keeps its volume. A second input takes a static collider, the top can be open, and the source can keep emitting. Frames are cached. **Particle Fluid Surface** meshes the particles into a closed, smooth surface and carries `v` onto it. **Ocean** displaces a grid (its own, or yours) with hundreds of wind-driven waves. Wave height follows the wind speed, and the node outputs choppy crests, exact normals and a `foam` attribute where the surface folds.
+- **Vellum.** The **Vellum Solver** uses XPBD with many small substeps. Polygons become cloth (stretch and bend), open curves become ropes or hair, and closed meshes can be held inflated by **Pressure** to make soft bodies. Pin points with a `pin` attribute or a group pattern such as `@P.y > 1.9`. Pinned points follow the input, so you can animate them. The cloth collides with the ground, a sphere, the collider input (each connected part as its convex hull; it may be animated) and itself (point to point). Frames are cached.
 - **Render View.** A progressive path tracer renders the displayed node from the Scene View camera: sun with soft shadows, sky light, bounced light, glossy and metallic surfaces, glowing (emissive) surfaces and particles, and smoke and fire with shadows. The **Material** node sets roughness, metallic and glow per primitive or point. Sun, sky, exposure, ground plane and curve thickness are under **Settings** and are saved with the scene, along with the camera. **Save Image** writes a PNG; **Render Sequence** renders the timeline range to numbered PNGs. PNGs are written uncompressed, so they are large (about 2.7 MB at 1280 x 720).
 - **Keyframes.** Every numeric parameter on every node can be keyframed, including lights, cameras and simulation settings. **Alt+click** a parameter's name to set a key at the current frame; after that, changing the value on another frame sets a key there automatically. Animated fields are blue, and green when a key sits on the current frame. Keys show as marks on the timeline (green for the selected nodes, grey for the rest), **<K** / **K>** jump between them, and **K** keys all animated parameters of the selection. Right-click a parameter to remove a key, choose its curve (smooth, linear or constant) or delete the animation. **Windows → Animation Editor** lists every animated channel with its keys, which you can drag in time. With **Lock** on, moving the view while looking through an animated camera keys the camera.
 - **Expressions.** Right-click any parameter and choose **Add Expression** (e.g. `sin($T*2)`, `$F*1.5`). Nodes that depend on time recook during playback; everything else stays cached.
@@ -43,6 +47,8 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 - **`hdc`.** A headless command-line tool, similar to `hbatch`, for cooking scenes and exporting geometry or whole frame sequences.
 
 ![A wall fractured and broken by a ball (frames 1, 8, 14, 40)](docs/screenshot-destruction.png)
+
+![FLIP dam break, Vellum cloth over a ball, and the ocean](docs/screenshot-fluids-vellum.png)
 
 ![Render View](docs/screenshot-render.png)
 
@@ -135,7 +141,7 @@ v@vel = curlnoise(@P * 0.5);                 // new vector attribute
 
 ## Examples
 
-`examples/` contains `terrain`, `ripples` (animated), `city`, `sculpt`, `molecule`, the keyframed `bounce`, the particle scenes `sparks` and `vortex`, the pyro scenes `smoke` and `fire`, and `destruction` (a ball breaking a wall). Press Play for the simulations. The same scenes are available inside the app under **File → Open Example**.
+`examples/` contains `terrain`, `ripples` (animated), `city`, `sculpt`, `molecule`, the keyframed `bounce`, the particle scenes `sparks` and `vortex`, the pyro scenes `smoke` and `fire`, `destruction` (a ball breaking a wall), `dambreak` (FLIP), `cloth` (Vellum) and `ocean`. Press Play for the simulations. The same scenes are available inside the app under **File → Open Example**.
 
 ## Command line (`hdc`)
 
@@ -155,7 +161,8 @@ hdc demo terrain my_scene.hdg               # write a demo scene
 ```
 src/core/     engine (no UI deps): Geometry + attributes, node graph with cook caching
               and time dependence, VEX-lite compiler/interpreter, SOP nodes, particle
-              and smoke solvers with per-frame caches, Voronoi fracture + RBD solver, voxel volumes,
+              and smoke solvers with per-frame caches, Voronoi fracture + RBD, FLIP + fluid surface + ocean,
+              Vellum (XPBD), voxel volumes,
               CPU path tracer, OBJ/PLY, JSON scene format
 src/render/   OpenGL 3.3 core renderer (own loader, MSAA framebuffer, shaders)
 src/app/      Dear ImGui UI: network editor, parameters, viewport, spreadsheet, timeline
@@ -172,6 +179,7 @@ A node recooks only when its parameters, inputs or bypass state change, or when 
 2. ~~Smoke and fire~~ — done (dense grids). Next for volumes: sparse grids, volume wrangle, convert volumes to and from meshes.
 3. Packed primitives and instancing, plus a GPU path for heavy copies.
 6. ~~Fracturing and rigid bodies~~ — done. Next: constraints (hinge, spring, cone twist), concave collision via convex decomposition, debris particles from breaking pieces.
-7. FLIP fluids and Vellum (cloth, soft bodies) — next major phase.
+7. ~~FLIP fluids, ocean and Vellum~~ — done. Next: whitewater (foam/spray/bubbles), surface tension, sparse/narrow-band FLIP, Vellum triangle self-collision, grains and tetrahedral soft bodies.
+8. Materials and rendering (Phase 5): node shaders, textures, refraction/glass, SSS, OpenEXR, AOVs, denoising — next major phase.
 4. ~~Path-traced render view~~ — done. Next for rendering: denoising, textures, area lights, depth of field, compressed image output.
 5. ~~Subnetworks and assets~~ — done. Next: parameters promoted to the outside of a subnet, linked (locked) assets, Python scripting.

@@ -11,7 +11,7 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Engine / UI split | Working | `hd_core` (no UI deps), `hd_render` (OpenGL 3.3), `hd_app` (Dear ImGui), `hdc` headless CLI |
 | Node graph with cook caching and time dependence | Working | Recooks only what changed |
 | Network editor, parameter pane, spreadsheet, timeline | Working | Tab menu, wiring, display/bypass flags, subnets, assets |
-| Houdini-style menus and shelf | Partial | File, Edit, Render, Assets, Windows, Help; shelf tabs Create, Modify, Lights and Cameras, Particles, Pyro FX, Rigid Bodies. No separate Modeling / Rigging / Solaris / Compositing menus yet |
+| Houdini-style menus and shelf | Partial | File, Edit, Render, Assets, Windows, Help; shelf tabs Create, Modify, Lights and Cameras, Particles, Pyro FX, Rigid Bodies, Fluids, Vellum. No separate Modeling / Rigging / Solaris / Compositing menus yet |
 | Dockable panes | Partial | Panes can be shown, hidden and reset; free docking and multi-monitor windows are not done |
 | Viewport | Working | Perspective, MSAA, wireframe, points, normals, ground grid, Display Options |
 | Orthographic views | Planned | |
@@ -47,10 +47,16 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 
 ## Phase 4: fluids, Vellum, advanced physics
 
-| Area | Status |
-|---|---|
-| FLIP fluids, ocean, whitewater, meshing | Planned |
-| Vellum cloth, hair, soft bodies, grains | Planned |
+| Area | Status | Notes |
+|---|---|---|
+| FLIP liquids | Working | MAC grid, PIC/FLIP blend, MIC(0)-preconditioned CG pressure solve with free surface and solid walls, implicit viscosity, RK2 advection, CFL substeps, static collider, open top, continuous emission, per-frame cache. Particle separation keeps volume: a dam break settles at 0.308 m against an expected 0.31 m, where it falls to 0.16 m without separation. Tests check divergence after projection, particle count, container and collider bounds, settled depth and determinism |
+| FLIP limits | Note | Dense grid (no sparse or narrow-band), CPU only, static colliders, no surface tension, no whitewater (foam, spray, bubbles) yet |
+| Fluid meshing | Working | Particle Fluid Surface: smoothed union-of-spheres distance field, marching tetrahedra (always closed). A sphere of particles meshes to within 1% of its volume |
+| Ocean | Partial | Wind-driven directional spectrum (Phillips shape, scaled to Pierson-Moskowitz wave height) as Gerstner waves with choppiness, exact normals, velocity and a Jacobian foam mask. Tested: wave height matches the wind, normals match the surface. It isn't an FFT ocean and doesn't tile; no ocean-to-FLIP blending |
+| Vellum cloth | Working | XPBD stretch + bend (across shared edges), pins (attribute or group, may be animated), ground, sphere, convex collider parts (may be animated), friction, inelastic contacts, point self-collision. Tested: pins hold, under 1% stretch, free fall matches the formula, drapes without entering the collider |
+| Vellum ropes / hair | Working | Open curves: stretch + bend over two segments. Tested: a pinned rope swings down and keeps its length |
+| Vellum soft bodies | Partial | Pressure (volume) constraint on closed meshes keeps them inflated (tested within 5%). No tetrahedral solids yet |
+| Vellum limits | Note | Self collision is point to point (no triangle tests), so fine cloth can still pass through itself. Colliders are convex hulls per part. No grains, fur grooming, welds/tearing, or Bullet |
 
 ## Phase 5: materials, lighting, rendering
 
@@ -76,7 +82,7 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 
 | Area | Status |
 |---|---|
-| Automated core tests | Working: ~630,000 checks over the geometry, graph, solvers, renderer and every example scene |
+| Automated core tests | Working: about 900,000 checks covering geometry, the node graph, every solver, the renderer and every example scene |
 | CI on macOS, Windows and Linux | Working: every push builds, tests and packages |
 
 ## Phase 8: installers

@@ -1,0 +1,55 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 30,
+  "nodes": [
+    {
+      "inputs": [null],
+      "name": "ocean",
+      "parms": {
+        "gridres": 300,
+        "gridsize": 60,
+        "windspeed": 10
+      },
+      "type": "ocean",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": ["ocean"],
+      "name": "water_material",
+      "parms": {
+        "rough": 0.100000001
+      },
+      "type": "material",
+      "x": 0,
+      "y": 92
+    },
+    {
+      "inputs": ["water_material"],
+      "name": "OUT",
+      "parms": {},
+      "type": "null",
+      "x": 0,
+      "y": 184
+    }
+  ],
+  "range": [1, 240],
+  "render": {
+    "bounces": 4,
+    "camera": [0, 0, 0, 200, 12, 28, 45],
+    "curveWidth": 0.0120000001,
+    "exposure": 1,
+    "ground": false,
+    "groundY": 0,
+    "height": 540,
+    "samples": 64,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 20,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

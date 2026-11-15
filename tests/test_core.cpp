@@ -1,6 +1,7 @@
 // Headless tests for the HD core engine.
 #include "core/Demo.h"
 #include "core/Expr.h"
+#include "core/Fluids.h"
 #include "core/Fracture.h"
 #include "core/GeoIO.h"
 #include "core/Lights.h"
@@ -1168,6 +1169,230 @@ TEST(rbd_solver) {
     CHECK(mn.y > -0.05f);
 }
 
+// ---------------------------------------------------------------- fluids and vellum
+
+
+TEST(flip_projection) {
+    // a block of fluid with a random velocity field: after one solve the grid is divergence free
+    std::vector<Vec3> P, V;
+    for (int k = 0; k < 16; ++k) for (int j = 0; j < 16; ++j) for (int i = 0; i < 16; ++i) {
+        Vec3 p = Vec3(float(i) + 0.5f, float(j) + 0.5f, float(k) + 0.5f) * 0.05f + Vec3(0.2f);
+        P.push_back(p);
+        uint32_t h = uint32_t(i + 16 * (j + 16 * k));
+        V.push_back(Vec3(hashRandom(h * 3u) - 0.5f, hashRandom(h * 3u + 1u) - 0.5f, hashRandom(h * 3u + 2u) - 0.5f) * 2.f);
+    }
+    int subs = 0;
+    float div = flipTestStep(P, V, Vec3(0), 24, 0.05f, 0.002f, Vec3(0), &subs);
+    CHECK(subs >= 1);
+    // initial divergence is O(|v| / dx) ~ 20 1/s; after projection it must be tiny
+    CHECK(div < 0.05f);
+}
+
+TEST(flip_solver) {
+    Graph g;
+    Node* src = g.createNode("box");
+    src->parm("size")->val[0] = 0.6f; src->parm("size")->val[1] = 0.8f; src->parm("size")->val[2] = 0.6f;
+    src->parm("t")->val[0] = -0.7f; src->parm("t")->val[1] = 0.4f;
+    Node* obs = g.createNode("box");
+    obs->parm("size")->val[0] = 0.2f; obs->parm("size")->val[1] = 0.3f; obs->parm("size")->val[2] = 0.6f;
+    obs->parm("t")->val[0] = 0.4f; obs->parm("t")->val[1] = 0.15f;
+    Node* fl = g.createNode("flipsolver");
+    g.connect(src, fl, 0);
+    g.connect(obs, fl, 1);
+    fl->parm("voxelsize")->val[0] = 0.1f;
+    fl->parm("domaincenter")->val[1] = 0.5f;
+    fl->parm("domainsize")->val[0] = 2; fl->parm("domainsize")->val[1] = 1; fl->parm("domainsize")->val[2] = 0.6f;
+    fl->parm("flipratio")->val[0] = 0.5f;
+    g.frame = 1; g.cook(fl);
+    CHECK(fl->error().empty());
+    const size_t n0 = fl->geometry().numPoints();
+    CHECK(n0 == size_t(6 * 8 * 6 * 8));
+    g.frame = 30; g.cook(fl);
+    const Geometry mid = fl->geometry();
+    CHECK(mid.numPoints() == n0);               // a closed container never loses particles
+    Vec3 mn, mx; mid.bounds(mn, mx);
+    CHECK(mn.x >= -1.f && mx.x <= 1.f && mn.y >= 0.f && mn.z >= -0.3f && mx.z <= 0.3f);
+    bool inObstacle = false;
+    for (auto& p : mid.P) if (p.x > 0.3f && p.x < 0.5f && p.y < 0.3f) inObstacle = true;
+    CHECK(!inObstacle);
+    CHECK(fl->simCacheStart == 1 && fl->simCacheEnd == 30);
+    // settles to a flat layer with the original volume: depth = V / area (obstacle volume excluded)
+    g.frame = 240; g.cook(fl);
+    double ysum = 0;
+    for (auto& p : fl->geometry().P) ysum += p.y;
+    double depth = 2 * ysum / double(fl->geometry().numPoints());
+    double expected = (0.6 * 0.8 * 0.6) / (2.0 * 0.6 - 0.2 * 0.6) + 0.05; // + half a voxel of floor offset
+    CHECK(std::fabs(depth - expected) < 0.15 * expected);
+    // cached and deterministic
+    g.frame = 30; g.cook(fl);
+    bool same = fl->geometry().numPoints() == mid.numPoints();
+    for (size_t i = 0; i < mid.numPoints() && same; ++i) same = mid.P[i] == fl->geometry().P[i];
+    CHECK(same);
+    // particle fluid surface around the result: a closed mesh
+    Node* surf = g.createNode("particlefluidsurface");
+    g.connect(fl, surf, 0);
+    g.frame = 240; g.cook(surf);
+    CHECK(surf->error().empty());
+    CHECK(surf->geometry().numPrims() > 100);
+    CHECK(closedManifold(fusePoints(surf->geometry(), 1e-6f)));
+}
+
+TEST(fluid_surface_volume) {
+    // particles on a lattice filling a sphere of radius 0.5: the surface is closed and encloses about that volume
+    Geometry pts;
+    const float sep = 0.04f;
+    for (int k = -13; k <= 13; ++k) for (int j = -13; j <= 13; ++j) for (int i = -13; i <= 13; ++i) {
+        Vec3 p = Vec3(float(i), float(j), float(k)) * sep;
+        if (length(p) <= 0.5f - sep * 0.5f) pts.addPoint(p);
+    }
+    Geometry surf;
+    CHECK(particleFluidSurface(pts, sep, 1.0f, 0.6f, 2, surf));
+    CHECK(closedManifold(fusePoints(surf, 1e-6f)));
+    double vol = signedVolume(surf), want = 4.0 / 3.0 * 3.14159265 * 0.125;
+    CHECK(std::fabs(vol / want - 1) < 0.03);
+    // the default radius scale (1.2) adds a thin margin that hides gaps between irregular particles
+    Geometry surf2;
+    CHECK(particleFluidSurface(pts, sep, 1.2f, 0.6f, 2, surf2));
+    CHECK(std::fabs(signedVolume(surf2) / want - 1) < 0.08);
+    // every point lies close to the sphere
+    float worst = 0;
+    for (auto& p : surf.P) worst = std::max(worst, std::fabs(length(p) - 0.5f));
+    CHECK(worst < 0.05f);
+}
+
+TEST(ocean) {
+    Graph g;
+    Node* oc = g.createNode("ocean");
+    oc->parm("gridsize")->val[0] = 60; oc->parm("gridres")->val[0] = 120;
+    oc->parm("windspeed")->val[0] = 10;
+    g.frame = 1; g.cook(oc);
+    CHECK(oc->error().empty());
+    const Geometry a = oc->geometry();
+    CHECK(a.numPoints() == 121u * 121u);
+    double mean = 0, var = 0;
+    for (auto& p : a.P) mean += p.y;
+    mean /= double(a.numPoints());
+    for (auto& p : a.P) var += (p.y - mean) * (p.y - mean);
+    double hs = 4 * std::sqrt(var / double(a.numPoints()));
+    double hsPM = 0.21 * 10 * 10 / 9.81; // Pierson-Moskowitz, ~2.1 m
+    CHECK(std::fabs(mean) < 0.1 * hsPM);
+    CHECK(hs > 0.5 * hsPM && hs < 1.5 * hsPM);
+    const Attrib* N = a.findAttrib(AttribClass::Point, "N");
+    const Attrib* foam = a.findAttrib(AttribClass::Point, "foam");
+    CHECK(N && foam);
+    bool unit = true, foamOk = true, up = true;
+    for (size_t i = 0; i < a.numPoints(); ++i) {
+        unit = unit && std::fabs(length(N->getV(i)) - 1) < 1e-3f;
+        up = up && N->getV(i).y > 0;
+        foamOk = foamOk && foam->getF(i) >= 0 && foam->getF(i) <= 1;
+    }
+    CHECK(unit && up && foamOk);
+    // normals agree with the actual surface slope (finite differences on the displaced grid)
+    {
+        int i = 60, j = 60, W = 121;
+        Vec3 dxv = a.P[size_t(j * W + i + 1)] - a.P[size_t(j * W + i - 1)];
+        Vec3 dzv = a.P[size_t((j + 1) * W + i)] - a.P[size_t((j - 1) * W + i)];
+        Vec3 fdN = normalize(cross(dzv, dxv));
+        CHECK(dot(fdN, N->getV(size_t(j * W + i))) > 0.98f);
+    }
+    // animated, and calmer wind gives smaller waves
+    g.frame = 24; g.cook(oc);
+    CHECK(oc->geometry().P[500] != a.P[500]);
+    oc->parm("windspeed")->val[0] = 4; oc->touch();
+    g.cook(oc);
+    double var2 = 0, m2 = 0;
+    for (auto& p : oc->geometry().P) m2 += p.y;
+    m2 /= double(oc->geometry().numPoints());
+    for (auto& p : oc->geometry().P) var2 += (p.y - m2) * (p.y - m2);
+    CHECK(var2 < var * 0.5);
+}
+
+TEST(vellum) {
+    // hanging cloth pinned along its top edge: pins stay put and the cloth barely stretches
+    Graph g;
+    Node* gr = g.createNode("grid");
+    gr->parm("sizex")->val[0] = 2; gr->parm("sizey")->val[0] = 2;
+    Node* xf = g.createNode("xform");
+    g.connect(gr, xf, 0);
+    xf->parm("r")->val[0] = 90; xf->parm("t")->val[1] = 3;
+    Node* v = g.createNode("vellumsolver");
+    g.connect(xf, v, 0);
+    v->parm("pinpts")->str = "@P.y > 3.99";
+    g.frame = 48; g.cook(v);
+    CHECK(v->error().empty());
+    const Geometry& r = xf->geometry();
+    const Geometry& o = v->geometry();
+    bool pinsFixed = true;
+    for (size_t i = 0; i < r.numPoints(); ++i) if (r.P[i].y > 3.99f) pinsFixed = pinsFixed && length(o.P[i] - r.P[i]) < 1e-5f;
+    CHECK(pinsFixed);
+    float maxStretch = 0;
+    for (auto& pr : r.prims)
+        for (int k = 0; k < pr.count; ++k) {
+            int a = r.vertices[size_t(pr.start + k)], b = r.vertices[size_t(pr.start + (k + 1) % pr.count)];
+            maxStretch = std::max(maxStretch, length(o.P[size_t(a)] - o.P[size_t(b)]) / length(r.P[size_t(a)] - r.P[size_t(b)]) - 1);
+        }
+    CHECK(maxStretch < 0.01f);
+    CHECK(v->simCacheEnd == 48);
+
+    // free fall matches 1/2 g t^2 before anything is hit (drag off)
+    Graph g2;
+    Node* gr2 = g2.createNode("grid");
+    gr2->parm("sizex")->val[0] = 1; gr2->parm("sizey")->val[0] = 1;
+    Node* x2 = g2.createNode("xform");
+    g2.connect(gr2, x2, 0);
+    x2->parm("t")->val[1] = 3;
+    Node* v2 = g2.createNode("vellumsolver");
+    g2.connect(x2, v2, 0);
+    v2->parm("drag")->val[0] = 0; v2->parm("damping")->val[0] = 0;
+    g2.frame = 13; g2.cook(v2);
+    Vec3 mn, mx; v2->geometry().bounds(mn, mx);
+    CHECK(std::fabs((3 - mn.y) - 0.5f * 9.81f * 0.25f) < 0.01f);
+
+    // draped over a sphere: never inside it, and it ends up resting on it and the ground
+    v2->parm("sphere")->val[0] = 1; v2->parm("spherec")->val[1] = 1; v2->parm("spherer")->val[0] = 0.4f; v2->touch();
+    gr2->parm("sizex")->val[0] = 2; gr2->parm("sizey")->val[0] = 2; gr2->parm("rows")->val[0] = 20; gr2->parm("cols")->val[0] = 20; gr2->touch();
+    g2.frame = 96; g2.cook(v2);
+    float md = 1e9f;
+    for (auto& p : v2->geometry().P) md = std::min(md, length(p - Vec3(0, 1, 0)));
+    CHECK(md > 0.4f);
+    v2->geometry().bounds(mn, mx);
+    CHECK(mn.y >= 0.f && mx.y < 1.5f && mx.y > 1.35f);
+
+    // pressure keeps a closed mesh inflated
+    Graph g3;
+    Node* sp = g3.createNode("sphere");
+    sp->parm("rad")->val[0] = sp->parm("rad")->val[1] = sp->parm("rad")->val[2] = 0.5f;
+    sp->parm("t")->val[1] = 1.5f;
+    Node* v3 = g3.createNode("vellumsolver");
+    g3.connect(sp, v3, 0);
+    v3->parm("pressureon")->val[0] = 1;
+    g3.frame = 72; g3.cook(v3);
+    CHECK(v3->error().empty());
+    double vol0 = signedVolume(sp->geometry()), vol = signedVolume(v3->geometry());
+    CHECK(std::fabs(vol / vol0 - 1) < 0.05);
+    v3->geometry().bounds(mn, mx);
+    CHECK(mn.y >= 0.f);
+    // and without pressure the same sphere collapses
+    v3->parm("pressureon")->val[0] = 0; v3->parm("bend")->val[0] = 0.001f; v3->touch();
+    g3.cook(v3);
+    CHECK(signedVolume(v3->geometry()) < 0.8 * vol0);
+
+    // rope: a pinned polyline swings down and keeps its length
+    Graph g4;
+    Node* ln = g4.createNode("line");
+    ln->parm("origin")->val[1] = 2; ln->parm("dir")->val[0] = 1; ln->parm("dir")->val[1] = 0; ln->parm("points")->val[0] = 21;
+    Node* v4 = g4.createNode("vellumsolver");
+    g4.connect(ln, v4, 0);
+    v4->parm("pinpts")->str = "0";
+    g4.frame = 48; g4.cook(v4);
+    const Geometry& rope = v4->geometry();
+    float len = 0;
+    for (size_t i = 0; i + 1 < rope.numPoints(); ++i) len += length(rope.P[i + 1] - rope.P[i]);
+    CHECK(std::fabs(len - 1.f) < 0.02f);
+    CHECK(rope.P.back().y < 1.5f); // swung down
+    CHECK(length(rope.P[0] - Vec3(0, 2, 0)) < 1e-5f);
+}
+
 #ifdef HD_EXAMPLES_DIR
 TEST(example_files_cook_cleanly) {
     int n = 0;
@@ -1186,7 +1411,7 @@ TEST(example_files_cook_cleanly) {
             }
         }
     }
-    CHECK(n >= 11);
+    CHECK(n >= 14);
 }
 #endif
 
