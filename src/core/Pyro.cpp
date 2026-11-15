@@ -61,7 +61,7 @@ struct PyroSim {
     std::vector<float> u, v, w, d, t, p, div;
     std::vector<float> nu, nv, nw, nd, nt;
     std::vector<float> cu, cv, cw, ox, oy, oz, fx, fy, fz;
-    std::vector<unsigned char> solid, src;
+    std::vector<unsigned char> solid, src, open;
 
     size_t C(int i, int j, int k) const { return size_t(i) + size_t(nx) * (size_t(j) + size_t(ny) * size_t(k)); }
     size_t U(int i, int j, int k) const { return size_t(i) + size_t(nx + 1) * (size_t(j) + size_t(ny) * size_t(k)); }
@@ -81,6 +81,14 @@ struct PyroSim {
     Vec3 velAt(float x, float y, float z) const {
         return {interp(u, nx + 1, ny, nz, x, y - 0.5f, z - 0.5f), interp(v, nx, ny + 1, nz, x - 0.5f, y, z - 0.5f),
                 interp(w, nx, ny, nz + 1, x - 0.5f, y - 0.5f, z)};
+    }
+    // Velocity at a face of axis `axis` whose own component is already known (`own`, read straight
+    // from the grid); NaN means "interpolate it" (the far boundary face, where interp clamps).
+    Vec3 velAt(float x, float y, float z, int axis, float own) const {
+        float c0 = (axis == 0 && own == own) ? own : interp(u, nx + 1, ny, nz, x, y - 0.5f, z - 0.5f);
+        float c1 = (axis == 1 && own == own) ? own : interp(v, nx, ny + 1, nz, x - 0.5f, y, z - 0.5f);
+        float c2 = (axis == 2 && own == own) ? own : interp(w, nx, ny, nz + 1, x - 0.5f, y - 0.5f, z);
+        return {c0, c1, c2};
     }
 
     void enforceSolids(bool ground) {
@@ -199,13 +207,32 @@ struct PyroSim {
         });
         const float omega = 1.7f;
         const size_t sy = size_t(nx), sz = size_t(nx) * size_t(ny);
+        // Cells away from the grid boundary whose six neighbours are all fluid take a branch-free
+        // path. It sums in the same order as the general path, so results are bit-identical.
+        open.assign(size_t(nx) * ny * nz, 0);
+        parallelFor(nz, [&](int k0, int k1) {
+            for (int k = std::max(k0, 1); k < std::min(k1, nz - 1); ++k)
+                for (int j = 1; j < ny - 1; ++j)
+                    for (int i = 1; i < nx - 1; ++i) {
+                        size_t c = C(i, j, k);
+                        open[c] = !(solid[c] | solid[c - 1] | solid[c + 1] | solid[c - sy] | solid[c + sy] | solid[c - sz] | solid[c + sz]);
+                    }
+        });
         for (int it = 0; it < s.iterations; ++it)
             for (int colour = 0; colour < 2; ++colour)
                 parallelFor(nz, [&](int k0, int k1) {
+                    float* P = p.data();
+                    const float* D = div.data();
                     for (int k = k0; k < k1; ++k)
-                        for (int j = 0; j < ny; ++j)
+                        for (int j = 0; j < ny; ++j) {
+                            const size_t row = C(0, j, k);
                             for (int i = (j + k + colour) & 1; i < nx; i += 2) {
-                                size_t c = C(i, j, k);
+                                const size_t c = row + size_t(i);
+                                if (open[c]) {
+                                    float sum = P[c - 1] + P[c + 1] + P[c - sy] + P[c + sy] + P[c - sz] + P[c + sz];
+                                    P[c] += omega * ((sum - D[c]) / 6.f - P[c]);
+                                    continue;
+                                }
                                 if (solid[c]) continue;
                                 float sum = 0;
                                 int diag = 0;
@@ -218,27 +245,44 @@ struct PyroSim {
                                 if (!diag) continue;
                                 p[c] += omega * ((sum - div[c]) / float(diag) - p[c]);
                             }
+                        }
                 });
-        // subtract the pressure gradient
-        auto P = [&](int i, int j, int k) { return (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) ? 0.f : p[C(i, j, k)]; };
-        auto S = [&](int i, int j, int k) { return !(i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) && solid[C(i, j, k)]; };
+        // subtract the pressure gradient (pressure outside the grid is 0; faces touching a solid are 0)
+        parallelFor(nz, [&](int k0, int k1) {
+            for (int k = k0; k < k1; ++k)
+                for (int j = 0; j < ny; ++j) {
+                    const size_t cb = C(0, j, k);
+                    float* uf = &u[U(0, j, k)];
+                    for (int i = 0; i <= nx; ++i) {
+                        bool sl = i > 0 && solid[cb + i - 1], sr = i < nx && solid[cb + i];
+                        float pr = i < nx ? p[cb + i] : 0.f, pl = i > 0 ? p[cb + i - 1] : 0.f;
+                        if (sl || sr) uf[i] = 0; else uf[i] -= pr - pl;
+                    }
+                }
+        });
+        parallelFor(nz, [&](int k0, int k1) {
+            for (int k = k0; k < k1; ++k)
+                for (int j = 0; j <= ny; ++j) {
+                    float* vf = &v[Vi(0, j, k)];
+                    for (int i = 0; i < nx; ++i) {
+                        bool sb = j > 0 && solid[C(i, j - 1, k)], st = j < ny && solid[C(i, j, k)];
+                        if (sb || st || (j == 0 && s.ground)) { vf[i] = 0; continue; }
+                        float pt = j < ny ? p[C(i, j, k)] : 0.f, pb = j > 0 ? p[C(i, j - 1, k)] : 0.f;
+                        vf[i] -= pt - pb;
+                    }
+                }
+        });
         parallelFor(nz + 1, [&](int k0, int k1) {
             for (int k = k0; k < k1; ++k)
-                for (int j = 0; j <= ny; ++j)
-                    for (int i = 0; i <= nx; ++i) {
-                        if (j < ny && k < nz) {
-                            float& f = u[U(i, j, k)];
-                            if (S(i - 1, j, k) || S(i, j, k)) f = 0; else f -= P(i, j, k) - P(i - 1, j, k);
-                        }
-                        if (i < nx && k < nz) {
-                            float& f = v[Vi(i, j, k)];
-                            if (S(i, j - 1, k) || S(i, j, k) || (j == 0 && s.ground)) f = 0; else f -= P(i, j, k) - P(i, j - 1, k);
-                        }
-                        if (i < nx && j < ny) {
-                            float& f = w[W(i, j, k)];
-                            if (S(i, j, k - 1) || S(i, j, k)) f = 0; else f -= P(i, j, k) - P(i, j, k - 1);
-                        }
+                for (int j = 0; j < ny; ++j) {
+                    float* wf = &w[W(0, j, k)];
+                    for (int i = 0; i < nx; ++i) {
+                        bool sb = k > 0 && solid[C(i, j, k - 1)], sf = k < nz && solid[C(i, j, k)];
+                        if (sb || sf) { wf[i] = 0; continue; }
+                        float pf = k < nz ? p[C(i, j, k)] : 0.f, pb = k > 0 ? p[C(i, j, k - 1)] : 0.f;
+                        wf[i] -= pf - pb;
                     }
+                }
         });
     }
 
@@ -250,17 +294,17 @@ struct PyroSim {
                     for (int i = 0; i <= nx; ++i) {
                         if (j < ny && k < nz) {
                             float x = float(i), y = j + 0.5f, z = k + 0.5f;
-                            Vec3 vel = velAt(x, y, z) * a;
+                            Vec3 vel = velAt(x, y, z, 0, i < nx ? u[U(i, j, k)] : NAN) * a;
                             nu[U(i, j, k)] = interp(u, nx + 1, ny, nz, x - vel.x, y - vel.y - 0.5f, z - vel.z - 0.5f);
                         }
                         if (i < nx && k < nz) {
                             float x = i + 0.5f, y = float(j), z = k + 0.5f;
-                            Vec3 vel = velAt(x, y, z) * a;
+                            Vec3 vel = velAt(x, y, z, 1, j < ny ? v[Vi(i, j, k)] : NAN) * a;
                             nv[Vi(i, j, k)] = interp(v, nx, ny + 1, nz, x - vel.x - 0.5f, y - vel.y, z - vel.z - 0.5f);
                         }
                         if (i < nx && j < ny) {
                             float x = i + 0.5f, y = j + 0.5f, z = float(k);
-                            Vec3 vel = velAt(x, y, z) * a;
+                            Vec3 vel = velAt(x, y, z, 2, k < nz ? w[W(i, j, k)] : NAN) * a;
                             nw[W(i, j, k)] = interp(w, nx, ny, nz + 1, x - vel.x - 0.5f, y - vel.y - 0.5f, z - vel.z);
                         }
                         if (i < nx && j < ny && k < nz) {
