@@ -214,7 +214,7 @@ A node recooks only when its parameters, inputs or bypass state change, or when 
 2. ~~Smoke and fire~~ — done (dense grids). Next for volumes: sparse grids, volume wrangle, convert volumes to and from meshes.
 3. Packed primitives and instancing, plus a GPU path for heavy copies.
 6. ~~Fracturing and rigid bodies~~ — done. Next: constraints (hinge, spring, cone twist), concave collision via convex decomposition, debris particles from breaking pieces.
-7. ~~FLIP fluids, ocean and Vellum~~ — done. Next: whitewater (foam/spray/bubbles), surface tension, sparse/narrow-band FLIP, Vellum triangle self-collision, grains and tetrahedral soft bodies.
+7. ~~FLIP fluids, ocean and Vellum~~ — done. Next: whitewater (foam/spray/bubbles), surface tension, sparse/narrow-band FLIP, Vellum edge-edge collision (point-triangle is done), grains and tetrahedral soft bodies.
 8. ~~USD, rigging and animation, compositing~~ — done. Next: USD references/variants and a LOP network, crowds, camera tracking, a dedicated image viewer with channels.
 9. ~~Optimization and stability (Phase 7)~~ — done: benchmarks, sanitizer CI, fuzzing, headless app smoke test, FLIP 2.1x and Vellum 1.5x faster. Pyro and the viewport material preview followed. Next: soak tests.
 10. ~~Installers and releases (Phase 8)~~ — done: icons, file associations, version info, install-tested packages in CI, tagged GitHub Releases. Next: code signing/notarization (needs the owner's certificates), AppImage, auto-update.

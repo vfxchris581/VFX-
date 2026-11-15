@@ -7,7 +7,8 @@
 //  * Pins: points with a "pin" attribute > 0.5 or matching the Pin Points group follow the input,
 //    so pinned points can be animated.
 //  * Collisions: ground plane, a sphere, the convex hulls of each part of the collider input (which may
-//    be animated), and optional point-point self collision.
+//    be animated), optional point-point self collision, and optional point-triangle self collision that
+//    keeps each point on the side of a cloth triangle it was on at the start of the substep.
 // XPBD with many small substeps makes stiffness independent of the step size.
 #include "Fracture.h"
 #include "Node.h"
@@ -46,6 +47,8 @@ struct VellumSetup {
     std::vector<DistC> dist;          // stretch first, then bend
     size_t numStretch = 0;
     std::vector<int> volTris;         // closed-mesh triangles for the pressure constraint
+    std::vector<int> tris;            // every cloth triangle (point-triangle self collision)
+    float meanEdge = 0;
     float restVolume = 0;
     std::vector<float> invMass;       // 0 = pinned
     std::vector<char> pinned;
@@ -123,6 +126,7 @@ struct SimParams {
     Vec3 sphereC;
     float sphereR;
     bool self;
+    bool selfTris;
 };
 
 // Projects points out of colliders. contactN receives the push direction of points that touched a collider.
@@ -212,6 +216,108 @@ void collide(std::vector<Vec3>& x, const std::vector<Vec3>& xprev, const VellumS
     }
 }
 
+// Point-triangle self collision. Each point near a cloth triangle (not one of its corners) is kept
+// at least `th` away on the side it was on at the start of the substep (from xprev), so a point that
+// moved through a triangle during the substep is put back. Mass-weighted XPBD-style projection:
+// C = dot(p - q, n) - th with q = b0 x0 + b1 x1 + b2 x2.
+// Contacts are recorded in contactN like collider contacts, so the velocity update removes the
+// separating velocity a push would otherwise create (inelastic, no bouncing or launching).
+void selfCollideTriangles(std::vector<Vec3>& x, const std::vector<Vec3>& xprev, const VellumSetup& su, float th,
+                          std::vector<Vec3>& contactN) {
+    const size_t n = x.size(), nt = su.tris.size() / 3;
+    if (!nt || th <= 0) return;
+    const float cs = std::max(4 * th, su.meanEdge);
+    const float inv = 1.f / cs;
+    size_t nb = 1;
+    while (nb < nt * 4) nb <<= 1;
+    const size_t mask = nb - 1;
+    auto bucket = [&](int a, int b, int c) { return size_t((uint32_t(a) * 73856093u) ^ (uint32_t(b) * 19349663u) ^ (uint32_t(c) * 83492791u)) & mask; };
+    // cells each triangle's box (grown by the thickness and this substep's motion) touches
+    auto cellRange = [&](size_t t, int lo[3], int hi[3]) {
+        Vec3 mn(1e30f), mx(-1e30f);
+        for (int k = 0; k < 3; ++k) {
+            const size_t id = size_t(su.tris[3 * t + size_t(k)]);
+            mn = vmin(mn, vmin(x[id], xprev[id])); mx = vmax(mx, vmax(x[id], xprev[id]));
+        }
+        for (int a = 0; a < 3; ++a) { lo[a] = int(std::floor((mn[a] - 3 * th) * inv)); hi[a] = int(std::floor((mx[a] + 3 * th) * inv)); }
+        // a triangle stretched across a huge box (an exploding sim) is skipped rather than flood the grid
+        return size_t(hi[0] - lo[0] + 1) * size_t(hi[1] - lo[1] + 1) * size_t(hi[2] - lo[2] + 1) <= 512;
+    };
+    std::vector<int> start(nb + 1, 0);
+    std::vector<char> usable(nt, 0);
+    for (size_t t = 0; t < nt; ++t) {
+        int lo[3], hi[3];
+        if (!cellRange(t, lo, hi)) continue;
+        usable[t] = 1;
+        for (int c = lo[2]; c <= hi[2]; ++c) for (int b = lo[1]; b <= hi[1]; ++b) for (int a = lo[0]; a <= hi[0]; ++a) start[bucket(a, b, c) + 1]++;
+    }
+    for (size_t k = 0; k < nb; ++k) start[k + 1] += start[k];
+    std::vector<int> items(size_t(start[nb]));
+    {
+        std::vector<int> fill(start.begin(), start.end() - 1);
+        for (size_t t = 0; t < nt; ++t) {
+            if (!usable[t]) continue;
+            int lo[3], hi[3];
+            cellRange(t, lo, hi);
+            for (int c = lo[2]; c <= hi[2]; ++c) for (int b = lo[1]; b <= hi[1]; ++b) for (int a = lo[0]; a <= hi[0]; ++a)
+                items[size_t(fill[bucket(a, b, c)]++)] = int(t);
+        }
+    }
+    // per-triangle data, computed once per call: box (grown by th), unit normals now and at substep start
+    struct TriInfo { Vec3 mn, mx, n, nPrev; bool ok; };
+    std::vector<TriInfo> info(nt);
+    for (size_t t = 0; t < nt; ++t) {
+        TriInfo& ti = info[t];
+        const size_t i0 = size_t(su.tris[3 * t]), i1 = size_t(su.tris[3 * t + 1]), i2 = size_t(su.tris[3 * t + 2]);
+        Vec3 nc = cross(x[i1] - x[i0], x[i2] - x[i0]), np = cross(xprev[i1] - xprev[i0], xprev[i2] - xprev[i0]);
+        float lc = length(nc), lp = length(np);
+        ti.ok = usable[t] && lc > 1e-12f && lp > 1e-12f;
+        if (!ti.ok) continue;
+        ti.n = nc / lc; ti.nPrev = np / lp;
+        ti.mn = vmin(x[i0], vmin(x[i1], x[i2])) - Vec3(3 * th); ti.mx = vmax(x[i0], vmax(x[i1], x[i2])) + Vec3(3 * th); // covers the crossing test below
+    }
+    for (size_t i = 0; i < n; ++i) {
+        const size_t bk = bucket(int(std::floor(x[i].x * inv)), int(std::floor(x[i].y * inv)), int(std::floor(x[i].z * inv)));
+        for (int k = start[bk]; k < start[bk + 1]; ++k) {
+            const size_t t = size_t(items[size_t(k)]);
+            const TriInfo& ti = info[t];
+            if (!ti.ok) continue;
+            const Vec3& p = x[i];
+            if (p.x < ti.mn.x || p.y < ti.mn.y || p.z < ti.mn.z || p.x > ti.mx.x || p.y > ti.mx.y || p.z > ti.mx.z) continue;
+            const int i0 = su.tris[3 * t], i1 = su.tris[3 * t + 1], i2 = su.tris[3 * t + 2];
+            if (int(i) == i0 || int(i) == i1 || int(i) == i2) continue;
+            const float wp = su.invMass[i], w0 = su.invMass[size_t(i0)], w1 = su.invMass[size_t(i1)], w2 = su.invMass[size_t(i2)];
+            if (wp + w0 + w1 + w2 == 0) continue;
+            const Vec3 &a = x[size_t(i0)], &b = x[size_t(i1)], &c = x[size_t(i2)];
+            // which side the point was on before this substep (earlier pushes in this pass moved the
+            // triangle a little since `info` was filled; the normal is still a good side test)
+            const float side = dot(xprev[i] - xprev[size_t(i0)], ti.nPrev);
+            Vec3 nc = ti.n;
+            if (side < 0 || (side == 0 && dot(p - a, nc) < 0)) nc = -nc;
+            float dist = dot(p - a, nc);
+            if (dist >= th || dist < -2 * th - length(p - xprev[i])) continue; // clear, or far beyond (another layer)
+            // barycentrics of the projection; only the triangle's interior is handled here (edges and
+            // corners are covered by the neighbouring triangles and point-point collision)
+            const Vec3 e0 = b - a, e1 = c - a, ep = p - nc * dist - a;
+            const float d00 = dot(e0, e0), d01 = dot(e0, e1), d11 = dot(e1, e1), dp0 = dot(ep, e0), dp1 = dot(ep, e1);
+            const float den = d00 * d11 - d01 * d01;
+            if (den <= 1e-20f) continue;
+            const float b1 = (d11 * dp0 - d01 * dp1) / den, b2 = (d00 * dp1 - d01 * dp0) / den, b0 = 1 - b1 - b2;
+            if (b0 < -1e-4f || b1 < -1e-4f || b2 < -1e-4f) continue;
+            const float C = dist - th;
+            const float wsum = wp + w0 * b0 * b0 + w1 * b1 * b1 + w2 * b2 * b2;
+            if (wsum <= 0) continue;
+            const float lam = -C / wsum;
+            x[i] += nc * (lam * wp);
+            x[size_t(i0)] -= nc * (lam * w0 * b0);
+            x[size_t(i1)] -= nc * (lam * w1 * b1);
+            x[size_t(i2)] -= nc * (lam * w2 * b2);
+            contactN[i] = nc;
+            for (int id : {i0, i1, i2}) contactN[size_t(id)] = -nc;
+        }
+    }
+}
+
 void substep(std::vector<Vec3>& x, std::vector<Vec3>& v, const VellumSetup& su, const SimParams& sp, const Collider& col,
              const std::vector<Vec3>* pinTargets) {
     const size_t n = x.size();
@@ -265,7 +371,8 @@ void substep(std::vector<Vec3>& x, std::vector<Vec3>& v, const VellumSetup& su, 
         }
     }
     std::vector<Vec3> contactN(n, Vec3(0));
-    collide(x, xprev, su, sp, col, contactN);
+    if (sp.selfTris) selfCollideTriangles(x, xprev, su, sp.thickness, contactN);
+    collide(x, xprev, su, sp, col, contactN); // colliders last: they win over cloth-cloth pushes
     const float keep = std::max(0.f, 1.f - sp.damping * dt);
     for (size_t i = 0; i < n; ++i) {
         v[i] = su.invMass[i] == 0 ? (x[i] - xprev[i]) / dt : (x[i] - xprev[i]) / dt * keep;
@@ -296,6 +403,7 @@ bool buildSetup(CookContext& c, const Geometry& g, VellumSetup& su) {
             for (int k = 0; k < pr.count; ++k) mass[size_t(g.vertices[size_t(pr.start + k)])] += density * area / float(pr.count);
             for (int k = 1; k + 1 < pr.count; ++k) {
                 int t[3] = {g.vertices[size_t(pr.start)], g.vertices[size_t(pr.start + k)], g.vertices[size_t(pr.start + k + 1)]};
+                if (t[0] != t[1] && t[1] != t[2] && t[0] != t[2]) su.tris.insert(su.tris.end(), t, t + 3);
                 for (int e = 0; e < 3; ++e) {
                     int a = t[e], b = t[(e + 1) % 3], o = t[(e + 2) % 3];
                     edgeOpp[{std::min(a, b), std::max(a, b)}].push_back(o);
@@ -311,7 +419,12 @@ bool buildSetup(CookContext& c, const Geometry& g, VellumSetup& su) {
     }
     const float stretchK = std::max(1e-6f, c.f("stretch"));
     const float bendK = std::max(1e-9f, c.f("bend"));
-    for (auto& e : edges) su.dist.push_back({e.first, e.second, length(g.P[size_t(e.first)] - g.P[size_t(e.second)]), 1.f / stretchK});
+    double edgeSum = 0;
+    for (auto& e : edges) {
+        su.dist.push_back({e.first, e.second, length(g.P[size_t(e.first)] - g.P[size_t(e.second)]), 1.f / stretchK});
+        edgeSum += double(su.dist.back().rest);
+    }
+    su.meanEdge = edges.empty() ? 0.f : float(edgeSum / double(edges.size()));
     su.numStretch = su.dist.size();
     // cloth bend: across every interior edge
     std::set<std::pair<int, int>> bendPairs;
@@ -438,6 +551,7 @@ void cookVellum(CookContext& c) {
         sp.sphereC = c.v("spherec");
         sp.sphereR = c.f("spherer");
         sp.self = c.b("selfcollide");
+        sp.selfTris = c.b("selftris");
         // pinned points follow the (possibly animated) input, interpolated across the frame
         std::vector<Vec3> pinA, pinB, pinT;
         bool pins = animIn;
@@ -503,6 +617,8 @@ void registerVellumNodes(std::vector<NodeType>& types) {
         V("spherec", "Sphere Center", Vec3(0, 1, 0), -5, 5),
         F("spherer", "Sphere Radius", 0.5f, 0, 5),
         T("selfcollide", "Self Collision (points)", true),
+        T("selftris", "Self Collision (triangles)", false,
+          "Keeps points from passing through cloth triangles, so layers fold and stack instead of passing through each other. Slower."),
     };
     t.cook = cookVellum;
     types.push_back(t);

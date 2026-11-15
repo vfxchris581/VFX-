@@ -1417,6 +1417,53 @@ TEST(vellum) {
     CHECK(length(rope.P[0] - Vec3(0, 2, 0)) < 1e-5f);
 }
 
+TEST(vellum_triangle_self_collision) {
+    // A coarse sheet falls onto an identical sheet offset by half a cell, so its points land between
+    // the lower sheet's points. Point-point collision alone lets it fall through to the ground;
+    // point-triangle collision keeps it on top.
+    Graph g;
+    Node* lo = g.createNode("grid");
+    lo->parm("sizex")->val[0] = 2; lo->parm("sizey")->val[0] = 2;
+    lo->parm("rows")->val[0] = 9; lo->parm("cols")->val[0] = 9;
+    lo->parm("t")->val[1] = 0.02f;
+    Node* hi = g.createNode("grid");
+    hi->parm("sizex")->val[0] = 1.5f; hi->parm("sizey")->val[0] = 1.5f;
+    hi->parm("rows")->val[0] = 7; hi->parm("cols")->val[0] = 7;
+    hi->parm("t")->val[0] = 0.125f; hi->parm("t")->val[1] = 0.6f; hi->parm("t")->val[2] = 0.125f;
+    Node* m = g.createNode("merge");
+    g.connect(lo, m, 0);
+    g.connect(hi, m, 1);
+    Node* v = g.createNode("vellumsolver");
+    g.connect(m, v, 0);
+    v->parm("thickness")->val[0] = 0.03f; // lower sheet rests at y ~ 0.03, an upper one on it at ~0.06
+    const size_t nLow = 81;
+    auto fellThrough = [&]() {
+        const Geometry& o = v->geometry();
+        int below = 0;
+        for (size_t i = nLow; i < o.numPoints(); ++i) below += o.P[i].y < 0.045f;
+        return below;
+    };
+    g.frame = 36; g.cook(v);
+    CHECK(v->error().empty());
+    const int withoutTris = fellThrough();
+    CHECK(withoutTris > 20); // most of the 49 upper points reach the ground
+
+    v->parm("selftris")->val[0] = 1; v->touch();
+    g.cook(v);
+    CHECK(v->error().empty());
+    const int withTris = fellThrough();
+    if (withTris) std::printf("    with triangle collision %d of 49 upper points fell through (without: %d)\n", withTris, withoutTris);
+    CHECK(withTris == 0);
+    // and the upper sheet rests on the lower one, not hovering far above it
+    float maxY = -1;
+    for (size_t i = nLow; i < v->geometry().numPoints(); ++i) maxY = std::max(maxY, v->geometry().P[i].y);
+    if (maxY >= 0.15f) std::printf("    upper sheet max y %.3f\n", maxY);
+    CHECK(maxY < 0.15f);
+    bool finite = true;
+    for (auto& p : v->geometry().P) finite = finite && std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+    CHECK(finite);
+}
+
 // ---------------------------------------------------------------- rendering (phase 5)
 
 TEST(image_io) {

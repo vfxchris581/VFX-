@@ -53,10 +53,10 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | FLIP limits | Note | Dense grid (no sparse or narrow-band), CPU only, static colliders, no surface tension, no whitewater (foam, spray, bubbles) yet |
 | Fluid meshing | Working | Particle Fluid Surface: smoothed union-of-spheres distance field, marching tetrahedra (always closed). A sphere of particles meshes to within 1% of its volume |
 | Ocean | Partial | Wind-driven directional spectrum (Phillips shape, scaled to Pierson-Moskowitz wave height) as Gerstner waves with choppiness, exact normals, velocity and a Jacobian foam mask. Tested: wave height matches the wind, normals match the surface. It isn't an FFT ocean and doesn't tile; no ocean-to-FLIP blending |
-| Vellum cloth | Working | XPBD stretch + bend (across shared edges), pins (attribute or group, may be animated), ground, sphere, convex collider parts (may be animated), friction, inelastic contacts, point self-collision. Tested: pins hold, under 1% stretch, free fall matches the formula, drapes without entering the collider |
+| Vellum cloth | Working | XPBD stretch + bend (across shared edges), pins (attribute or group, may be animated), ground, sphere, convex collider parts (may be animated), friction, inelastic contacts, point self-collision, and optional point-triangle self-collision (Self Collision (triangles)). Tested: pins hold, under 1% stretch, free fall matches the formula, drapes without entering the collider |
 | Vellum ropes / hair | Working | Open curves: stretch + bend over two segments. Tested: a pinned rope swings down and keeps its length |
 | Vellum soft bodies | Partial | Pressure (volume) constraint on closed meshes keeps them inflated (tested within 5%). No tetrahedral solids yet |
-| Vellum limits | Note | Self collision is point to point (no triangle tests), so fine cloth can still pass through itself. Colliders are convex hulls per part. No grains, fur grooming, welds/tearing, or Bullet |
+| Vellum limits | Note | Triangle self-collision handles points against triangle faces and undoes crossings within a substep; there are no edge-edge tests, so two edges can still slip past each other, and it roughly doubles solve time. Colliders are convex hulls per part. No grains, fur grooming, welds/tearing, or Bullet |
 
 ## Phase 5: materials, lighting, rendering
 
