@@ -818,6 +818,8 @@ bool booleanMeshes(const Geometry& ain, const Geometry& bin, int op, Geometry& r
             float a = length(cross(t.p[1] - t.p[0], t.p[2] - t.p[0]));
             if (a > repArea[size_t(r)]) { repArea[size_t(r)] = a; rep[size_t(r)] = int(i); }
         }
+        std::vector<int> rootOf(nt); // resolved here: root() compresses paths, which must not happen from several threads
+        for (size_t i = 0; i < nt; ++i) rootOf[i] = root(int(i));
         std::vector<Class> rootCls(nt, Outside);
         parallelFor(int(nt), [&](int lo, int hi) {
             for (int r = lo; r < hi; ++r) {
@@ -831,7 +833,7 @@ bool booleanMeshes(const Geometry& ain, const Geometry& bin, int op, Geometry& r
             for (int i = lo; i < hi; ++i) {
                 const Tri& t = m.tris[size_t(i)];
                 if (segs[size_t(i)].empty()) {
-                    wholeCls[size_t(i)] = cop[size_t(i)] ? classify((t.p[0] + t.p[1] + t.p[2]) / 3.f, t.n, true) : rootCls[size_t(root(i))];
+                    wholeCls[size_t(i)] = cop[size_t(i)] ? classify((t.p[0] + t.p[1] + t.p[2]) / 3.f, t.n, true) : rootCls[size_t(rootOf[size_t(i)])];
                     continue;
                 }
                 std::vector<Poly> pcs = cutTriangle(t, segs[size_t(i)], scale);

@@ -221,7 +221,14 @@ int main(int argc, char** argv) {
     {
         Bytes seed;
         for (int i = 0; i < 24; ++i) seed.push_back(uint8_t(i * 53 + 7));
-        run("boolean", seed, [](const Bytes& b) {
+        // inputs that crashed once (kept as regression seeds; they also start the mutations)
+        static const char* regress[] = {"073c71a6db10457aafe4194e83b801000000c1f6ffffffff"};
+        auto fromHex = [](const char* hex) {
+            Bytes b;
+            for (size_t k = 0; hex[k] && hex[k + 1]; k += 2) { char two[3] = {hex[k], hex[k + 1], 0}; b.push_back(uint8_t(std::strtoul(two, nullptr, 16))); }
+            return b;
+        };
+        const auto booleanCase = [](const Bytes& b) {
             size_t pos = 0;
             auto next = [&]() -> uint32_t { return pos < b.size() ? b[pos++] : 0u; };
             static const char* shapes[] = {"box", "sphere", "torus", "tube", "grid"};
@@ -249,7 +256,9 @@ int main(int argc, char** argv) {
             for (int v : r.vertices) if (v < 0 || v >= int(r.numPoints())) std::abort();
             for (auto& [n, a] : r.primAttribs) if (a.count() != r.numPrims()) std::abort();
             for (auto& [n, a] : r.pointAttribs) if (a.count() != r.numPoints()) std::abort();
-        });
+        };
+        for (const char* hex : regress) run("boolean", fromHex(hex), booleanCase);
+        run("boolean", seed, booleanCase);
     }
     // shader networks: bytes pick shading nodes, wiring and parameter values (huge, tiny, NaN-free extremes)
     {
