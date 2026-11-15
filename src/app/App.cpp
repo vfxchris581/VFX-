@@ -507,9 +507,14 @@ void App::drawFileDialog() {
     std::vector<std::string> exts;
     if (fileMode_ == FileDialogMode::Open || fileMode_ == FileDialogMode::SaveAs || fileMode_ == FileDialogMode::MergeScene) exts = {".hdg"};
     else if (fileMode_ == FileDialogMode::ExportObj) exts = {".obj", ".ply"};
-    else if (fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence) exts = {".png"};
+    else if (fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence) exts = {".png", ".exr"};
     else if (fileMode_ == FileDialogMode::InstallAsset) exts = {".hda"};
-    else exts = {".obj"};
+    else if (fileMode_ == FileDialogMode::ChooseFileParm) {
+        // image parameters (texture and environment maps) browse images; others browse geometry
+        std::string pn = fileParmTarget.substr(fileParmTarget.find('/') + 1);
+        bool image = pn.size() >= 3 && pn.compare(pn.size() - 3, 3, "map") == 0;
+        exts = image ? std::vector<std::string>{".png", ".exr", ".hdr"} : std::vector<std::string>{".obj"};
+    } else exts = {".obj"};
 
     // path bar
     if (ImGui::Button("Up")) {
@@ -613,7 +618,11 @@ void App::drawFileDialog() {
         case FileDialogMode::MergeScene: mergeScene(chosen); break;
         case FileDialogMode::InstallAsset: installAsset(chosen); break;
         case FileDialogMode::SaveImage: {
-            bool ok = writePng(chosen, renderImg_, renderW_, renderH_, &err);
+            bool ok;
+            if (fs::path(chosen).extension() == ".exr") {
+                PathTracer::Buffers buf;
+                ok = tracer_.fetchBuffers(buf) && writeExrPasses(chosen, buf, true, &err);
+            } else ok = writePng(chosen, renderImg_, renderW_, renderH_, &err);
             status(ok ? "Saved " + chosen : "Save failed: " + err, !ok);
             break;
         }

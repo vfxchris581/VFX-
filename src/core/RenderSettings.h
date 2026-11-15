@@ -17,6 +17,16 @@ struct RenderSettings {
     float curveWidth = 0.012f; // world-space thickness of polylines
     bool ground = false;       // infinite ground plane
     float groundY = 0.f;
+    // lens and shutter
+    bool dof = false;          // thin-lens depth of field
+    float fstop = 4.f;
+    float focusDist = 5.f;     // world units from the eye
+    float sensorHeight = 24.f; // mm (36 x 24 full frame); camera nodes set it from their aperture
+    bool motionBlur = false;   // from the point velocity attribute v
+    float shutter = 0.5f;      // frames, centred on the frame
+    float fps = 24.f;          // set by the caller from the scene (not saved)
+    // output
+    bool denoise = false;      // edge-avoiding denoise of the final image (guided by albedo, normal, depth)
     // camera (orbit parameters, same as the viewport)
     bool hasCamera = false;
     Vec3 camTarget{0, 0, 0};

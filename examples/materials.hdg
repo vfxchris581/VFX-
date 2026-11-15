@@ -1,0 +1,167 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 1,
+  "nodes": [
+    {
+      "inputs": [],
+      "name": "glass_ball",
+      "parms": {
+        "cols": 96,
+        "rad": [0.550000012, 0.550000012, 0.550000012],
+        "rows": 48,
+        "t": [-1.60000002, 0.550000012, 0.400000006]
+      },
+      "type": "sphere",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": ["glass_ball"],
+      "name": "glass",
+      "parms": {
+        "color": [1, 1, 1],
+        "rough": 0.0199999996,
+        "setcolor": 1,
+        "transmit": 1
+      },
+      "type": "material",
+      "x": 0,
+      "y": 92
+    },
+    {
+      "inputs": [],
+      "name": "gold_ball",
+      "parms": {
+        "cols": 96,
+        "rad": [0.550000012, 0.550000012, 0.550000012],
+        "rows": 48,
+        "t": [-0.400000006, 0.550000012, -0.600000024]
+      },
+      "type": "sphere",
+      "x": 200,
+      "y": 0
+    },
+    {
+      "inputs": ["gold_ball"],
+      "name": "gold",
+      "parms": {
+        "color": [1, 0.779999971, 0.340000004],
+        "metal": 1,
+        "rough": 0.25,
+        "setcolor": 1
+      },
+      "type": "material",
+      "x": 200,
+      "y": 92
+    },
+    {
+      "inputs": [],
+      "name": "wax_ball",
+      "parms": {
+        "cols": 96,
+        "rad": [0.550000012, 0.550000012, 0.550000012],
+        "rows": 48,
+        "t": [0.800000012, 0.550000012, 0.5]
+      },
+      "type": "sphere",
+      "x": 400,
+      "y": 0
+    },
+    {
+      "inputs": ["wax_ball"],
+      "name": "wax",
+      "parms": {
+        "color": [0.949999988, 0.75, 0.600000024],
+        "rough": 0.400000006,
+        "setcolor": 1,
+        "sss": 1,
+        "sssradius": [0.25, 0.119999997, 0.0599999987]
+      },
+      "type": "material",
+      "x": 400,
+      "y": 92
+    },
+    {
+      "inputs": [],
+      "name": "tex_box",
+      "parms": {
+        "size": [0.899999976, 0.899999976, 0.899999976],
+        "t": [2, 0.449999988, -0.699999988]
+      },
+      "type": "box",
+      "x": 600,
+      "y": 0
+    },
+    {
+      "inputs": ["tex_box"],
+      "name": "uv",
+      "parms": {},
+      "type": "uvproject",
+      "x": 600,
+      "y": 46
+    },
+    {
+      "inputs": ["uv"],
+      "name": "textured",
+      "parms": {
+        "basemap": "$HIP/assets/checker.png",
+        "normalmap": "$HIP/assets/bumps_normal.png",
+        "rough": 0.349999994
+      },
+      "type": "material",
+      "x": 600,
+      "y": 92
+    },
+    {
+      "inputs": ["glass", "gold", "wax", "textured", null, null, null, null],
+      "name": "merge",
+      "parms": {},
+      "type": "merge",
+      "x": 200,
+      "y": 200
+    },
+    {
+      "inputs": ["merge"],
+      "name": "OUT",
+      "parms": {},
+      "type": "null",
+      "x": 200,
+      "y": 300
+    },
+    {
+      "inputs": [],
+      "name": "studio_hdri",
+      "parms": {
+        "env_map": "$HIP/assets/studio.hdr"
+      },
+      "type": "envlight",
+      "x": -200,
+      "y": 0
+    }
+  ],
+  "range": [1, 240],
+  "render": {
+    "bounces": 8,
+    "camera": [0.200000003, 0.5, 0, 10, 14, 6.19999981, 35],
+    "curveWidth": 0.0120000001,
+    "denoise": true,
+    "dof": true,
+    "exposure": 1,
+    "focusDist": 6,
+    "fstop": 2.79999995,
+    "ground": true,
+    "groundY": 0,
+    "height": 540,
+    "motionBlur": false,
+    "samples": 128,
+    "shutter": 0.5,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

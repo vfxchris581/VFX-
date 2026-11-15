@@ -14,13 +14,18 @@ void App::startRender() {
     if (!d->error().empty()) { status("Cannot render: " + d->name() + " has an error", true); return; }
     syncCameraToScene();
     RenderSettings rs = graph.render;
+    rs.fps = graph.fps;
     for (auto& cam : collectCameras(graph, graph.frame)) {
         if (cam.name != rs.cameraName) continue; // rendering through a camera node: its position, lens and resolution
         rs.useEye = true; rs.camEye = cam.eye; rs.camTarget = cam.eye + cam.fwd;
         rs.width = cam.resx; rs.height = cam.resy;
         rs.camFov = cam.fovYDegrees();
+        rs.sensorHeight = cam.aperture * float(cam.resy) / float(cam.resx);
+        if (cam.dof) { rs.dof = true; rs.fstop = cam.fstop; rs.focusDist = cam.focus; }
     }
     tracer_.start(d->geometry(), rs, collectLights(graph, graph.frame));
+    std::string warn = tracer_.warnings();
+    if (!warn.empty()) status("Render: " + warn.substr(0, warn.find('\n')), true);
 }
 
 void App::stepSequence() {
@@ -36,7 +41,10 @@ void App::stepSequence() {
             size_t dot = path.rfind('.');
             path.insert(dot == std::string::npos ? path.size() : dot, num);
             std::string err;
-            if (!writePng(path, img, w, h, &err)) { status("Sequence stopped: " + err, true); seqActive_ = false; }
+            bool exr = path.size() > 4 && path.compare(path.size() - 4, 4, ".exr") == 0;
+            PathTracer::Buffers buf;
+            bool ok = exr ? (tracer_.fetchBuffers(buf) && writeExrPasses(path, buf, true, &err)) : writePng(path, img, w, h, &err);
+            if (!ok) { status("Sequence stopped: " + err, true); seqActive_ = false; }
             else { ++seqCount_; status("Saved " + path); }
             seqWaiting_ = false;
             ++seqFrame_;
@@ -78,7 +86,21 @@ void App::drawRenderSettings() {
         ch |= ImGui::DragFloat("Ground Height", &rs.groundY, 0.01f);
         ch |= ImGui::DragFloat("Curve Thickness", &rs.curveWidth, 0.001f, 0.001f, 1.f, "%.3f");
         ch |= ImGui::SliderInt("Light Bounces", &rs.bounces, 0, 12);
-        ImGui::TextDisabled("Changes apply to the next render. Use a Material node\nfor roughness, metallic and glow.");
+        ImGui::SeparatorText("Camera");
+        ch |= ImGui::Checkbox("Depth of Field", &rs.dof);
+        ImGui::BeginDisabled(!rs.dof);
+        ch |= ImGui::SliderFloat("F-Stop", &rs.fstop, 0.5f, 32.f, "f/%.1f", ImGuiSliderFlags_Logarithmic);
+        ch |= ImGui::DragFloat("Focus Distance", &rs.focusDist, 0.02f, 0.01f, 1000.f, "%.2f");
+        ImGui::EndDisabled();
+        ch |= ImGui::Checkbox("Motion Blur", &rs.motionBlur);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Blurs moving geometry using its v (velocity) attribute");
+        ImGui::BeginDisabled(!rs.motionBlur);
+        ch |= ImGui::SliderFloat("Shutter (frames)", &rs.shutter, 0.f, 1.f);
+        ImGui::EndDisabled();
+        ImGui::SeparatorText("Output");
+        ch |= ImGui::Checkbox("Denoise Final Image", &rs.denoise);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Smooths the remaining noise when the render finishes (uses the albedo, normal and depth passes)");
+        ImGui::TextDisabled("Camera nodes with Depth of Field on use their own\nf-stop and focus. Save as .exr to keep every pass.\nChanges apply to the next render.");
         if (ch) markDirty();
     }
     ImGui::End();
@@ -125,7 +147,7 @@ void App::drawRenderView() {
     if (ImGui::Button("Save Image...") && !renderImg_.empty()) openFileDialog(FileDialogMode::SaveImage);
     ImGui::SameLine();
     if (ImGui::Button("Render Sequence...")) openFileDialog(FileDialogMode::SaveSequence);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render frames %d-%d (the timeline range) to numbered PNG files", graph.frameStart, graph.frameEnd);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render frames %d-%d (the timeline range) to numbered PNG or EXR files", graph.frameStart, graph.frameEnd);
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (tracer_.samplesTarget() > 0) {

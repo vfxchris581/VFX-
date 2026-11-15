@@ -16,7 +16,8 @@ static void usage() {
         "  hdc info   <scene.hdg> [--frame N]            list nodes and cook stats\n"
         "  hdc cook   <scene.hdg> <out.obj|out.ply> [--node NAME] [--frame N]\n"
         "  hdc frames <scene.hdg> <out_$F.obj> <start> <end> [--node NAME]   export a sequence\n"
-        "  hdc render <scene.hdg> <out.png> [--frame N | --frames A B] [--samples N] [--size W H] [--node NAME] [--camera NAME]\n"
+        "  hdc render <scene.hdg> <out.png|out.exr> [--frame N | --frames A B] [--samples N] [--size W H] [--node NAME] [--camera NAME]\n"
+        "             [--denoise | --no-denoise] [--motionblur]   (.exr writes RGBA plus albedo, N and Z passes)\n"
         "             path-trace the scene (a sequence writes out.0001.png, out.0002.png, ...)\n"
         "  hdc demo   <name> <out.hdg>                   write a demo scene\n"
         "  hdc demos                                     list demo scenes\n"
@@ -62,6 +63,12 @@ int main(int argc, char** argv) {
         if (!target) { std::printf("error: no node to render\n"); return 1; }
         RenderSettings rs = g.render;
         if (const char* s = opt(argc, argv, "--samples")) rs.samples = std::atoi(s);
+        rs.fps = g.fps;
+        for (int i = 1; i < argc; ++i) {
+            if (!std::strcmp(argv[i], "--denoise")) rs.denoise = true;
+            if (!std::strcmp(argv[i], "--no-denoise")) rs.denoise = false;
+            if (!std::strcmp(argv[i], "--motionblur")) rs.motionBlur = true;
+        }
         for (int i = 1; i + 2 < argc; ++i)
             if (!std::strcmp(argv[i], "--size")) { rs.width = std::atoi(argv[i + 1]); rs.height = std::atoi(argv[i + 2]); }
         int a = int(g.frame), b = int(g.frame);
@@ -93,6 +100,8 @@ int main(int argc, char** argv) {
                 SceneCamera fitted = cam;
                 fitted.resx = r.width; fitted.resy = r.height;
                 r.camFov = fitted.fovYDegrees();
+                r.sensorHeight = cam.aperture * float(r.height) / float(r.width);
+                if (cam.dof) { r.dof = true; r.fstop = cam.fstop; r.focusDist = cam.focus; }
             }
             pt.start(target->geometry(), r, collectLights(g, g.frame));
             pt.wait();
@@ -104,7 +113,12 @@ int main(int argc, char** argv) {
                 size_t dot = path.rfind('.');
                 path.insert(dot == std::string::npos ? path.size() : dot, num);
             }
-            if (!writePng(path, img, w, h, &err)) { std::printf("%s\n", err.c_str()); return 1; }
+            for (const std::string& wl : {pt.warnings()}) if (!wl.empty()) std::printf("warning: %s", wl.c_str());
+            bool exr = path.size() > 4 && (path.substr(path.size() - 4) == ".exr" || path.substr(path.size() - 4) == ".EXR");
+            if (exr) {
+                PathTracer::Buffers buf;
+                if (!pt.fetchBuffers(buf) || !writeExrPasses(path, buf, true, &err)) { std::printf("%s\n", err.c_str()); return 1; }
+            } else if (!writePng(path, img, w, h, &err)) { std::printf("%s\n", err.c_str()); return 1; }
             std::printf("frame %d -> %s (%dx%d, %d samples, %.1fs)\n", f, path.c_str(), w, h, pt.samplesDone(), pt.secondsElapsed());
         }
         return 0;

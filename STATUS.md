@@ -62,11 +62,24 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 
 | Area | Status | Notes |
 |---|---|---|
-| Path-traced Render View (CPU, progressive) | Working | GI, glossy/metallic, emissive, volumes with shadows, sun/sky |
-| Lights | Working | Point, Spot, Area, Distant, Environment, Sky, Ambient |
-| Material node | Partial | Roughness, metallic, glow. No node-based shader networks, textures, SSS, glass/refraction, displacement or UDIMs |
-| Image output | Partial | PNG (uncompressed). No OpenEXR, AOVs, Cryptomatte or denoising |
+| Path tracing (CPU, progressive) | Working | GI, next-event estimation for every light, Russian roulette, volumes with shadows |
+| Principled material | Working | Lambert under a GGX coat, GGX metal, rough GGX dielectric (exact Fresnel, Walter 2007 transmission, Heitz 2018 visible-normal sampling), smooth limits handled as perfect mirrors/refraction. White-furnace tests (glass, rough glass, mirror and rough metal, plastic, subsurface) check that energy is conserved |
+| Glass / water | Working | Transmission + IOR on the Material node. Shadows through glass are tinted, not caustic (refraction is ignored on shadow rays) |
+| Subsurface scattering | Working | Random walk inside closed meshes, per-channel scatter distance, albedo inversion (Chiang 2016). Open meshes lose the light that leaves through holes |
+| Texture maps, UDIM | Working | Base color, roughness, metallic, normal maps via point `uv`; PNG (all standard formats except interlaced), OpenEXR (scanline NONE/ZIPS/ZIP), Radiance HDR. JPEG and TIFF aren't read. Bilinear filtering, no mipmaps (distant textures can shimmer) |
+| UV Project | Working | Planar, box, cylindrical, spherical. No UV unwrapping, layout or editor |
+| Procedural textures | Partial | Through Attribute Wrangle (noise, etc.) into `Cd`; no texture nodes in the material |
+| Node-based shader networks (VOPs) | Planned | |
+| Displacement | Planned | Normal maps only |
+| Lights | Working | Point, spot, area, distant, sky, constant and HDRI environment (importance sampled + MIS). No light linking, IES profiles or geometry lights |
+| Depth of field | Working | Thin lens (f-stop, focus distance; camera nodes or Render Settings). Tested: out-of-focus edges widen, in-focus ones don't |
+| Motion blur | Working | Linear, from point `v`, centred shutter. Tested: the streak matches v x shutter. No deformation blur from sub-frame geometry, no camera motion blur |
+| Denoising | Working | Edge-avoiding a-trous (Dammertz 2010) with variance guidance, demodulated by albedo. Tested: error vs a 256-sample reference more than halves at 4 samples. It isn't Intel Open Image Denoise and leaves blotches at very low sample counts |
+| Render passes (AOVs) | Partial | Beauty, alpha, albedo, normal, depth (and denoised). No per-light, diffuse/specular split or Cryptomatte yet |
+| OpenEXR output | Working | Half float, ZIP compression, all passes in one file. Single-part scanline only |
+| PNG output | Working | Compressed (own zlib) |
 | GPU rendering | Planned | |
+| Render layers | Planned | |
 
 ## Phase 6: USD, animation, compositing
 

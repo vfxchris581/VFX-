@@ -17,6 +17,12 @@ ParmDef M(const char* n, const char* l, std::vector<std::string> items, int d = 
     ParmDef p; p.name = n; p.label = l; p.type = ParmType::Menu; p.menu = std::move(items); p.def[0] = float(d); return p;
 }
 
+ParmDef T(const char* n, const char* l, bool d, const char* help = "") {
+    ParmDef p; p.name = n; p.label = l; p.type = ParmType::Toggle; p.def[0] = d ? 1.f : 0.f; p.help = help; return p;
+}
+ParmDef File(const char* n, const char* l, const char* help = "") {
+    ParmDef p; p.name = n; p.label = l; p.type = ParmType::File; p.help = help; return p;
+}
 float ef(const Node& n, const Graph& g, const char* name, float frame) {
     const Parm* p = n.parm(name);
     return p ? n.evalFloat(*p, 0, frame, g.fps) : 0.f;
@@ -90,7 +96,11 @@ std::vector<Light> collectLights(const Graph& g, float frame) {
             Vec3 s = ev(n, g, "areasize", frame);
             l.sizeX = s.x; l.sizeY = s.y;
         } else if (tn == "distantlight") { l.type = Light::Distant; l.angle = ef(n, g, "angle", frame); }
-        else { l.type = Light::Env; l.sky = ef(n, g, "env_mode", frame) < 0.5f; }
+        else {
+            l.type = Light::Env; l.sky = ef(n, g, "env_mode", frame) < 0.5f;
+            if (const Parm* mp = n.parm("env_map")) l.map = mp->str;
+            l.rotate = ef(n, g, "env_rotate", frame);
+        }
         out.push_back(l);
     }
     return out;
@@ -109,6 +119,9 @@ std::vector<SceneCamera> collectCameras(const Graph& g, float frame) {
         c.aperture = std::max(1.f, ef(n, g, "aperture", frame));
         c.resx = std::clamp(int(ef(n, g, "resx", frame)), 16, 4096);
         c.resy = std::clamp(int(ef(n, g, "resy", frame)), 16, 4096);
+        c.dof = ef(n, g, "dof", frame) > 0.5f;
+        c.fstop = std::max(0.1f, ef(n, g, "fstop", frame));
+        c.focus = std::max(1e-3f, ef(n, g, "focus", frame));
         out.push_back(c);
     }
     return out;
@@ -121,7 +134,9 @@ void registerLightNodes(std::vector<NodeType>& types) {
         t.description = "A camera to look through and render from. Pick it from the Scene View's camera menu.";
         t.parms = {V("t", "Translate", Vec3(0, 2, 8), -20, 20), V("r", "Rotate", Vec3(-10, 0, 0), -180, 180, "Cameras look down their -Z axis (Z rotation / roll is ignored)"),
                    F("focal", "Focal Length", 50, 10, 200, "Millimetres. Larger = more zoomed in"), F("aperture", "Aperture", 41.4214f, 10, 100, "Horizontal film size in mm"),
-                   I("resx", "Resolution X", 1280, 16, 4096), I("resy", "Resolution Y", 720, 16, 4096)};
+                   I("resx", "Resolution X", 1280, 16, 4096), I("resy", "Resolution Y", 720, 16, 4096),
+                   T("dof", "Depth of Field", false), F("fstop", "F-Stop", 4, 0.5f, 32, "Smaller = shallower focus"),
+                   F("focus", "Focus Distance", 8, 0.01f, 100, "Distance from the camera that is sharp")};
         t.cook = [](CookContext&) {};
         types.push_back(t);
     }
@@ -150,6 +165,8 @@ void registerLightNodes(std::vector<NodeType>& types) {
     {
         auto p = lightParms(1, true, false);
         p.push_back(M("env_mode", "Type", {"Sky", "Constant Color (ambient)"}));
+        p.push_back(File("env_map", "Environment Map", "Lat-long .hdr, .exr or .png; replaces the sky"));
+        p.push_back(F("env_rotate", "Map Rotation", 0, -180, 180, "Degrees about Y"));
         addLight(types, "envlight", "Environment Light", "Light from all around: a sky, or one even color.", p);
     }
 }

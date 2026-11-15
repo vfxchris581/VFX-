@@ -1,9 +1,11 @@
 // Headless tests for the HD core engine.
 #include "core/Demo.h"
+#include "core/Denoise.h"
 #include "core/Expr.h"
 #include "core/Fluids.h"
 #include "core/Fracture.h"
 #include "core/GeoIO.h"
+#include "core/Image.h"
 #include "core/Lights.h"
 #include "core/Node.h"
 #include "core/Ops.h"
@@ -782,7 +784,13 @@ TEST(render_and_material) {
             long size = std::ftell(f);
             std::fclose(f);
             CHECK(got == 8 && sig[1] == 'P' && sig[2] == 'N' && sig[3] == 'G');
-            CHECK(size > 64 * 48 * 3);
+            CHECK(size > 100 && size < 64 * 48 * 3); // compressed
+            Image back;
+            CHECK(readImage(path, back, false));
+            bool same = back.w == w && back.h == h && back.c == 3;
+            for (int i = 0; i < w * h && same; ++i)
+                for (int k = 0; k < 3; ++k) same = same && int(std::lround(back.px[size_t(i) * 3 + size_t(k)] * 255)) == a[size_t(i) * 4 + size_t(k)];
+            CHECK(same);
             std::remove(path.c_str());
         }
     }
@@ -1393,6 +1401,352 @@ TEST(vellum) {
     CHECK(length(rope.P[0] - Vec3(0, 2, 0)) < 1e-5f);
 }
 
+// ---------------------------------------------------------------- rendering (phase 5)
+
+TEST(image_io) {
+    // zlib round trips on compressible and random data
+    for (int t = 0; t < 4; ++t) {
+        std::vector<uint8_t> d(size_t(5000 + t * 30011));
+        for (size_t i = 0; i < d.size(); ++i) d[i] = t % 2 ? uint8_t(hashRandom(uint32_t(i)) * 256) : uint8_t((i / 13) % 9 * 17);
+        auto z = zlibCompress(d.data(), d.size());
+        std::vector<uint8_t> o;
+        CHECK(zlibDecompress(z.data(), z.size(), o) && o == d);
+        if (t % 2 == 0) CHECK(z.size() < d.size() / 4);
+    }
+    std::vector<uint8_t> junk = {0x78, 0x9C, 1, 2, 3, 4, 5, 6};
+    std::vector<uint8_t> o;
+    CHECK(!zlibDecompress(junk.data(), junk.size(), o));
+    // PNG RGB / RGBA exact round trip
+    const int w = 37, h = 23;
+    for (int c : {3, 4}) {
+        std::vector<uint8_t> px(size_t(w * h * c));
+        for (size_t i = 0; i < px.size(); ++i) px[i] = uint8_t((i * 7) ^ (i >> 3));
+        CHECK(writePng8("hd_t.png", px, w, h, c));
+        Image im;
+        CHECK(readImage("hd_t.png", im, false));
+        bool same = im.w == w && im.h == h && im.c == c;
+        for (size_t i = 0; i < px.size() && same; ++i) same = int(std::lround(im.px[i] * 255)) == px[i];
+        CHECK(same);
+        // sRGB decoding for colour maps: 255 stays 1, 128 -> about 0.216
+        Image lin;
+        CHECK(readImage("hd_t.png", lin, true));
+        std::remove("hd_t.png");
+    }
+    // EXR: float exact, half within half precision; channels come back by name
+    std::vector<float> R(size_t(w * h)), Z(size_t(w * h));
+    for (int i = 0; i < w * h; ++i) { R[size_t(i)] = float(i) * 0.37f - 50.f; Z[size_t(i)] = 1e-3f * float(i * i); }
+    for (bool half : {false, true}) {
+        CHECK(writeExr("hd_t.exr", w, h, {{"Z", Z.data()}, {"R", R.data()}}, half));
+        int ww, hh;
+        std::vector<std::pair<std::string, std::vector<float>>> ch;
+        CHECK(readExrChannels("hd_t.exr", ww, hh, ch));
+        CHECK(ww == w && hh == h && ch.size() == 2 && ch[0].first == "R" && ch[1].first == "Z");
+        float err = 0;
+        for (int i = 0; i < w * h && ch.size() == 2; ++i) {
+            err = std::max(err, std::fabs(ch[0].second[size_t(i)] - R[size_t(i)]) / (std::fabs(R[size_t(i)]) + 1e-3f));
+            err = std::max(err, std::fabs(ch[1].second[size_t(i)] - Z[size_t(i)]) / (std::fabs(Z[size_t(i)]) + 1e-3f));
+        }
+        CHECK(err < (half ? 1e-3f : 1e-7f));
+        std::remove("hd_t.exr");
+    }
+    NEAR(halfToFloat(floatToHalf(1.f)), 1.f);
+    NEAR(halfToFloat(floatToHalf(-2.5f)), -2.5f);
+    CHECK(halfToFloat(floatToHalf(1e6f)) > 6e4f); // overflows to infinity
+    // Radiance HDR
+    Image hi;
+    hi.w = 16; hi.h = 9; hi.c = 3;
+    hi.px.resize(16 * 9 * 3);
+    for (size_t i = 0; i < hi.px.size(); ++i) hi.px[i] = std::pow(2.f, float(int(i / 3) % 20) - 10.f) * (1.f + 0.1f * float(i % 3));
+    CHECK(writeHdr("hd_t.hdr", hi));
+    Image hr;
+    CHECK(readImage("hd_t.hdr", hr, false));
+    float herr = 0;
+    for (size_t i = 0; i < hi.px.size() && hr.px.size() == hi.px.size(); ++i) herr = std::max(herr, std::fabs(hr.px[i] - hi.px[i]) / hi.px[i]);
+    CHECK(hr.w == 16 && hr.h == 9 && herr < 0.01f);
+    std::remove("hd_t.hdr");
+    // textures: bilinear lookup, wrapping and UDIM tiles
+    std::vector<uint8_t> two = {0, 0, 0, 255, 255, 255}; // 2x1: black, white
+    CHECK(writePng8("hd_tex.png", std::vector<uint8_t>{0, 0, 0, 255, 255, 255}, 2, 1, 3));
+    Texture tx;
+    CHECK(tx.load("hd_tex.png", false));
+    float v4[4];
+    tx.sample(0.25f, 0.5f, v4); NEAR(v4[0], 0.f);
+    tx.sample(0.75f, 0.5f, v4); NEAR(v4[0], 1.f);
+    tx.sample(0.5f, 0.5f, v4); NEAR(v4[0], 0.5f);
+    tx.sample(1.25f, 0.5f, v4); NEAR(v4[0], 0.f); // wraps
+    CHECK(writePng8("hd_udim.1001.png", std::vector<uint8_t>{10, 10, 10}, 1, 1, 3));
+    CHECK(writePng8("hd_udim.1002.png", std::vector<uint8_t>{200, 200, 200}, 1, 1, 3));
+    Texture ud;
+    CHECK(ud.load("hd_udim.<UDIM>.png", false));
+    ud.sample(0.5f, 0.5f, v4); CHECK(std::fabs(v4[0] - 10 / 255.f) < 1e-4f);
+    ud.sample(1.5f, 0.5f, v4); CHECK(std::fabs(v4[0] - 200 / 255.f) < 1e-4f);
+    ud.sample(5.5f, 0.5f, v4); NEAR(v4[0], 0.f); // missing tile
+    for (const char* f : {"hd_tex.png", "hd_udim.1001.png", "hd_udim.1002.png"}) std::remove(f);
+    // $HIP paths resolve against the scene folder
+    setSceneDirectory("/some/dir");
+    CHECK(resolvePath("$HIP/tex.png") == "/some/dir/tex.png");
+    CHECK(resolvePath("plain.png") == "plain.png");
+    setSceneDirectory("");
+}
+
+static PathTracer::Buffers renderBuffers(const Geometry& geo, RenderSettings rs, const std::vector<Light>& lights) {
+    PathTracer pt;
+    pt.start(geo, rs, lights);
+    pt.wait();
+    PathTracer::Buffers b;
+    pt.fetchBuffers(b);
+    return b;
+}
+
+static Vec3 centerMean(const PathTracer::Buffers& b, int r = 3) {
+    Vec3 s(0);
+    int n = 0;
+    for (int y = b.h / 2 - r; y <= b.h / 2 + r; ++y)
+        for (int x = b.w / 2 - r; x <= b.w / 2 + r; ++x) {
+            size_t i = size_t(y) * size_t(b.w) + size_t(x);
+            s += Vec3(b.beauty[i * 3], b.beauty[i * 3 + 1], b.beauty[i * 3 + 2]);
+            ++n;
+        }
+    return s / float(n);
+}
+
+static Geometry sphereWith(const std::function<void(Node*)>& setMat, float radius = 1) {
+    Graph g;
+    Node* sp = g.createNode("sphere");
+    sp->parm("rad")->val[0] = sp->parm("rad")->val[1] = sp->parm("rad")->val[2] = radius;
+    sp->parm("rows")->val[0] = 48; sp->parm("cols")->val[0] = 96;
+    Node* nm = g.createNode("normal");
+    g.connect(sp, nm, 0);
+    Node* m = g.createNode("material");
+    g.connect(nm, m, 0);
+    m->parm("setcolor")->val[0] = 1;
+    m->parm("color")->val[0] = m->parm("color")->val[1] = m->parm("color")->val[2] = 1;
+    setMat(m);
+    g.cook(m);
+    return m->geometry();
+}
+
+TEST(render_furnace) {
+    // White furnace: a white, non-absorbing object inside a uniform environment of radiance 1 must look ~1.
+    // This checks that each BSDF neither creates nor (much) loses energy, and that sampling is weighted right.
+    Light env;
+    env.type = Light::Env; env.sky = false; env.intensity = 1; env.color = Vec3(1);
+    RenderSettings rs;
+    rs.width = 48; rs.height = 36; rs.samples = 96; rs.bounces = 24; rs.camDist = 4; rs.camPitch = 0; rs.camYaw = 0;
+    auto check = [&](const char* name, const std::function<void(Node*)>& m, float lo, float hi) {
+        Vec3 c = centerMean(renderBuffers(sphereWith(m), rs, {env}));
+        float l = (c.x + c.y + c.z) / 3;
+        if (l < lo || l > hi) std::printf("  furnace %s: %.3f (want %.2f..%.2f)\n", name, l, lo, hi);
+        CHECK(l >= lo && l <= hi);
+    };
+    check("glass", [](Node* m) { m->parm("transmit")->val[0] = 1; m->parm("rough")->val[0] = 0.02f; }, 0.95f, 1.05f);
+    check("rough glass", [](Node* m) { m->parm("transmit")->val[0] = 1; m->parm("rough")->val[0] = 0.3f; }, 0.85f, 1.05f);
+    check("mirror metal", [](Node* m) { m->parm("metal")->val[0] = 1; m->parm("rough")->val[0] = 0.02f; }, 0.97f, 1.03f);
+    check("rough metal", [](Node* m) { m->parm("metal")->val[0] = 1; m->parm("rough")->val[0] = 0.3f; }, 0.85f, 1.03f);
+    check("plastic", [](Node* m) { m->parm("rough")->val[0] = 0.4f; }, 0.85f, 1.03f);
+    check("subsurface", [](Node* m) { m->parm("sss")->val[0] = 1; m->parm("sssradius")->val[0] = m->parm("sssradius")->val[1] = m->parm("sssradius")->val[2] = 0.2f; }, 0.8f, 1.05f);
+    // an absorbing (dark) material is clearly darker
+    check("dark", [](Node* m) { m->parm("color")->val[0] = m->parm("color")->val[1] = m->parm("color")->val[2] = 0.2f; }, 0.0f, 0.4f);
+    // the same furnace through an environment map (importance sampled, combined with MIS)
+    Image flat;
+    flat.w = 64; flat.h = 32; flat.c = 3;
+    flat.px.assign(64 * 32 * 3, 1.f);
+    CHECK(writeHdr("hd_flat.hdr", flat));
+    Light envMap = env;
+    envMap.map = "hd_flat.hdr";
+    Vec3 c = centerMean(renderBuffers(sphereWith([](Node* m) { m->parm("rough")->val[0] = 0.4f; }), rs, {envMap}));
+    float l = (c.x + c.y + c.z) / 3;
+    if (l < 0.85f || l > 1.03f) std::printf("  furnace env map plastic: %.3f\n", l);
+    CHECK(l >= 0.85f && l <= 1.03f);
+    // a bright patch in the map lights a diffuse sphere from that side only
+    Image patch = flat;
+    for (auto& v : patch.px) v = 0.f;
+    for (int y = 2; y < 6; ++y) for (int x = 30; x < 34; ++x) for (int k = 0; k < 3; ++k) patch.px[(size_t(y) * 64 + size_t(x)) * 3 + size_t(k)] = 400.f;
+    CHECK(writeHdr("hd_patch.hdr", patch));
+    envMap.map = "hd_patch.hdr";
+    PathTracer pt;
+    RenderSettings r2 = rs;
+    r2.samples = 16; r2.bounces = 2;
+    pt.start(sphereWith([](Node*) {}), r2, {envMap});
+    pt.wait();
+    PathTracer::Buffers b;
+    CHECK(pt.fetchBuffers(b) && pt.warnings().empty());
+    // the patch is high in the sky (about 70 degrees up) toward +Z, the camera's side: the top of the sphere is lit, the bottom is not
+    float top = 0, bottom = 0;
+    for (int x = b.w / 2 - 2; x <= b.w / 2 + 2; ++x) {
+        top += b.beauty[(size_t(b.h / 2 - 8) * size_t(b.w) + size_t(x)) * 3];
+        bottom += b.beauty[(size_t(b.h / 2 + 8) * size_t(b.w) + size_t(x)) * 3];
+    }
+    CHECK(top > 4 * bottom && top > 0);
+    // a missing map is reported, and rendering falls back to the plain environment
+    envMap.map = "does_not_exist.hdr";
+    pt.start(sphereWith([](Node*) {}), r2, {envMap});
+    pt.wait();
+    CHECK(!pt.warnings().empty());
+    std::remove("hd_flat.hdr");
+    std::remove("hd_patch.hdr");
+}
+
+TEST(render_camera_and_passes) {
+    // an emissive sphere on black: depth of field and motion blur widen its soft edge by the expected amount
+    Light dark;
+    dark.type = Light::Env; dark.sky = false; dark.intensity = 0;
+    Geometry ball = sphereWith([](Node* m) { m->parm("emit")->val[0] = 1; m->parm("color")->val[0] = m->parm("color")->val[1] = m->parm("color")->val[2] = 1; }, 0.5f);
+    RenderSettings rs;
+    rs.width = 96; rs.height = 64; rs.samples = 64; rs.bounces = 1; rs.camDist = 4; rs.camPitch = 0; rs.camYaw = 0; rs.camFov = 30;
+    auto partial = [](const PathTracer::Buffers& b) {
+        int n = 0;
+        for (int i = 0; i < b.w * b.h; ++i) { float v = b.alpha[size_t(i)]; n += v > 0.1f && v < 0.9f; }
+        return n;
+    };
+    auto extentX = [](const PathTracer::Buffers& b) {
+        int lo = b.w, hi = -1;
+        int y = b.h / 2;
+        for (int x = 0; x < b.w; ++x) if (b.alpha[size_t(y) * size_t(b.w) + size_t(x)] > 0.02f) { lo = std::min(lo, x); hi = std::max(hi, x); }
+        return hi - lo + 1;
+    };
+    PathTracer::Buffers sharp = renderBuffers(ball, rs, {dark});
+    // passes: alpha, depth, normal, albedo where the sphere is; nothing outside
+    {
+        size_t c = (size_t(sharp.h / 2) * size_t(sharp.w) + size_t(sharp.w / 2));
+        NEAR(sharp.alpha[c], 1.f);
+        CHECK(std::fabs(sharp.depth[c] - 3.5f) < 0.02f);
+        CHECK(sharp.normal[c * 3 + 2] > 0.99f);
+        CHECK(sharp.albedo[c * 3] > 0.99f);
+        NEAR(sharp.alpha[0], 0.f);
+        CHECK(sharp.depth[0] > 1e9f);
+    }
+    RenderSettings d = rs;
+    d.dof = true; d.fstop = 0.5f; d.focusDist = 1.5f;
+    PathTracer::Buffers blurred = renderBuffers(ball, d, {dark});
+    CHECK(partial(blurred) > 3 * partial(sharp));
+    // focused on the sphere, the lens changes nothing visible
+    d.focusDist = 3.5f;
+    CHECK(partial(renderBuffers(ball, d, {dark})) < 2 * partial(sharp) + 10);
+    // motion blur: v = 24 units/s, half-frame shutter at 24 fps = 0.5 units of travel, seen at 4 units with fov 30
+    Geometry moving = ball;
+    Attrib& v = moving.addAttrib(AttribClass::Point, "v", 3);
+    for (size_t i = 0; i < moving.numPoints(); ++i) v.setV(i, Vec3(24, 0, 0));
+    RenderSettings mb = rs;
+    mb.motionBlur = true; mb.shutter = 0.5f; mb.fps = 24;
+    int w0 = extentX(sharp), w1 = extentX(renderBuffers(moving, mb, {dark}));
+    float pxPerUnit = float(rs.height) / (2 * 4.f * std::tan(radians(15.f)));
+    float want = 0.5f * pxPerUnit;
+    if (std::fabs(float(w1 - w0) - want) > 3) std::printf("  motion blur streak %d px, expected %.1f\n", w1 - w0, want);
+    CHECK(std::fabs(float(w1 - w0) - want) <= 3);
+    // without the setting, v changes nothing
+    CHECK(extentX(renderBuffers(moving, rs, {dark})) == w0);
+    // EXR with all passes
+    PathTracer::Buffers den = sharp;
+    CHECK(writeExrPasses("hd_passes.exr", den, true));
+    int ww, hh;
+    std::vector<std::pair<std::string, std::vector<float>>> ch;
+    CHECK(readExrChannels("hd_passes.exr", ww, hh, ch));
+    std::set<std::string> names;
+    for (auto& c : ch) names.insert(c.first);
+    for (const char* n : {"R", "G", "B", "A", "albedo.R", "albedo.G", "albedo.B", "N.X", "N.Y", "N.Z", "Z"}) CHECK(names.count(n));
+    std::remove("hd_passes.exr");
+}
+
+TEST(render_textures_and_uv) {
+    // UV Project: box projection covers [0,1] on every face; planar fits the bounding box
+    Graph g;
+    Node* box = g.createNode("box");
+    Node* uv = g.createNode("uvproject");
+    g.connect(box, uv, 0);
+    g.cook(uv);
+    CHECK(uv->error().empty());
+    const Attrib* a = uv->geometry().findAttrib(AttribClass::Point, "uv");
+    CHECK(a && a->count() == uv->geometry().numPoints());
+    CHECK(uv->geometry().numPoints() == 24); // unshared per face
+    float mn = 1e9f, mx = -1e9f;
+    for (size_t i = 0; a && i < a->count(); ++i) { mn = std::min({mn, a->getV(i).x, a->getV(i).y}); mx = std::max({mx, a->getV(i).x, a->getV(i).y}); }
+    NEAR(mn, 0.f); NEAR(mx, 1.f);
+    for (int m = 0; m < 4; ++m) { uv->parm("method")->val[0] = float(m); uv->touch(); g.cook(uv); CHECK(uv->error().empty()); }
+    // an emissive textured card renders the texture: left half dark, right half light
+    CHECK(writePng8("hd_card.png", std::vector<uint8_t>{20, 20, 20, 230, 230, 230}, 2, 1, 3));
+    Node* grid = g.createNode("grid");
+    grid->parm("orient")->val[0] = 1; // XY, facing the camera
+    grid->parm("sizex")->val[0] = 2; grid->parm("sizey")->val[0] = 2; grid->parm("rows")->val[0] = 2; grid->parm("cols")->val[0] = 2;
+    Node* uv2 = g.createNode("uvproject");
+    g.connect(grid, uv2, 0);
+    uv2->parm("method")->val[0] = 0;
+    Node* m = g.createNode("material");
+    g.connect(uv2, m, 0);
+    m->parm("basemap")->str = "hd_card.png";
+    m->parm("emit")->val[0] = 1;
+    g.cook(m);
+    CHECK(m->error().empty() && m->warning().empty());
+    Light dark;
+    dark.type = Light::Env; dark.sky = false; dark.intensity = 0;
+    RenderSettings rs;
+    rs.width = 64; rs.height = 32; rs.samples = 4; rs.bounces = 1; rs.camDist = 2; rs.camPitch = 0; rs.camYaw = 0; rs.camFov = 30;
+    PathTracer pt;
+    pt.start(m->geometry(), rs, {dark});
+    pt.wait();
+    PathTracer::Buffers b;
+    CHECK(pt.fetchBuffers(b) && pt.warnings().empty());
+    // the card spans x in [-1, 1]; texel centres (u = 0.25, 0.75) land on pixels 17 and 47
+    float left = b.beauty[(size_t(16) * 64 + 17) * 3], right = b.beauty[(size_t(16) * 64 + 47) * 3];
+    // sRGB 20 -> 0.0070, 230 -> 0.791 (linear)
+    CHECK(std::fabs(left - 0.0070f) < 0.02f && std::fabs(right - 0.791f) < 0.05f);
+    // a normal map tilts the shading: the same lit card renders differently
+    CHECK(writePng8("hd_nrm.png", std::vector<uint8_t>{230, 128, 160}, 1, 1, 3));
+    m->parm("emit")->val[0] = 0; m->parm("basemap")->str = ""; m->touch();
+    g.cook(m);
+    Light sun;
+    sun.type = Light::Distant; sun.dir = normalize(Vec3(0.6f, 0, -1)); sun.intensity = 3; sun.angle = 0.5f;
+    Vec3 flatC = centerMean(renderBuffers(m->geometry(), rs, {sun}), 2);
+    m->parm("normalmap")->str = "hd_nrm.png"; m->touch();
+    g.cook(m);
+    Vec3 bumpC = centerMean(renderBuffers(m->geometry(), rs, {sun}), 2);
+    CHECK(std::fabs(bumpC.x - flatC.x) > 0.05f * flatC.x);
+    // a missing texture is reported
+    m->parm("normalmap")->str = "missing_texture.png"; m->touch();
+    g.cook(m);
+    pt.start(m->geometry(), rs, {sun});
+    pt.wait();
+    CHECK(pt.warnings().find("missing_texture.png") != std::string::npos);
+    std::remove("hd_card.png");
+    std::remove("hd_nrm.png");
+}
+
+TEST(denoiser) {
+    // a noisy low-sample render gets closer to a converged reference after denoising
+    Graph g;
+    Node* box = g.createNode("box");
+    Node* sp = g.createNode("sphere");
+    sp->parm("t")->val[0] = 1.2f;
+    Node* mg = g.createNode("merge");
+    g.connect(box, mg, 0);
+    g.connect(sp, mg, 1);
+    g.cook(mg);
+    RenderSettings rs;
+    rs.width = 64; rs.height = 48; rs.camDist = 5; rs.ground = true; rs.groundY = -0.5f;
+    rs.samples = 256;
+    PathTracer::Buffers ref = renderBuffers(mg->geometry(), rs, {});
+    rs.samples = 4;
+    rs.denoise = true;
+    PathTracer::Buffers noisy = renderBuffers(mg->geometry(), rs, {});
+    CHECK(noisy.denoised.size() == noisy.beauty.size());
+    double eNoisy = 0, eDen = 0;
+    for (size_t i = 0; i < ref.beauty.size(); ++i) {
+        eNoisy += double(noisy.beauty[i] - ref.beauty[i]) * double(noisy.beauty[i] - ref.beauty[i]);
+        eDen += double(noisy.denoised[i] - ref.beauty[i]) * double(noisy.denoised[i] - ref.beauty[i]);
+    }
+    if (eDen >= 0.5 * eNoisy) std::printf("  denoise error %.4f vs noisy %.4f\n", eDen, eNoisy);
+    CHECK(eDen < 0.5 * eNoisy);
+    // a flat, noise-free image is left alone
+    std::vector<float> flat(16 * 16 * 3, 0.5f), alb(16 * 16 * 3, 0.8f), nrm(16 * 16 * 3, 0.f), dep(16 * 16, 2.f);
+    for (int i = 0; i < 256; ++i) nrm[size_t(i) * 3 + 2] = 1;
+    DenoiseInput di;
+    di.w = di.h = 16; di.color = flat.data(); di.albedo = alb.data(); di.normal = nrm.data(); di.depth = dep.data();
+    auto out = denoiseImage(di);
+    float worst = 0;
+    for (float v : out) worst = std::max(worst, std::fabs(v - 0.5f));
+    CHECK(worst < 1e-5f);
+}
+
 #ifdef HD_EXAMPLES_DIR
 TEST(example_files_cook_cleanly) {
     int n = 0;
@@ -1411,7 +1765,7 @@ TEST(example_files_cook_cleanly) {
             }
         }
     }
-    CHECK(n >= 14);
+    CHECK(n >= 15);
 }
 #endif
 

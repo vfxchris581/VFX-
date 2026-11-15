@@ -23,6 +23,8 @@ struct Light {
     float sizeX = 1, sizeY = 1;  // area
     float angle = 1;             // distant: angular size in degrees (soft shadows)
     bool sky = true;             // env: sky gradient (true) or constant color
+    std::string map;             // env: lat-long HDR image (.hdr / .exr / .png); overrides sky/color when it loads
+    float rotate = 0;            // env: map rotation about Y, degrees
 };
 
 struct SceneCamera {
@@ -31,6 +33,8 @@ struct SceneCamera {
     Vec3 fwd{0, 0, -1};
     float focal = 50, aperture = 41.4214f; // mm; aperture is the horizontal film size
     int resx = 1280, resy = 720;
+    bool dof = false;
+    float fstop = 4, focus = 8;
     float fovYDegrees() const; // vertical field of view for resx:resy
 };
 

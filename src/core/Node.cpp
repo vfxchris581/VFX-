@@ -1,4 +1,5 @@
 #include "Node.h"
+#include "Image.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -559,6 +560,8 @@ Json Graph::toJson() const {
         j["sunIntensity"] = double(r.sunIntensity); j["skyIntensity"] = double(r.skyIntensity);
         j["exposure"] = double(r.exposure); j["curveWidth"] = double(r.curveWidth);
         j["ground"] = r.ground; j["groundY"] = double(r.groundY);
+        j["dof"] = r.dof; j["fstop"] = double(r.fstop); j["focusDist"] = double(r.focusDist);
+        j["motionBlur"] = r.motionBlur; j["shutter"] = double(r.shutter); j["denoise"] = r.denoise;
         if (!r.cameraName.empty()) j["cameraNode"] = r.cameraName;
         if (r.hasCamera) {
             Json c = Json::array();
@@ -698,6 +701,9 @@ bool Graph::fromJson(const Json& j, std::string* error) {
         render.sunIntensity = float(r.get("sunIntensity").num(d.sunIntensity)); render.skyIntensity = float(r.get("skyIntensity").num(d.skyIntensity));
         render.exposure = float(r.get("exposure").num(d.exposure)); render.curveWidth = float(r.get("curveWidth").num(d.curveWidth));
         render.ground = r.get("ground").boolean(d.ground); render.groundY = float(r.get("groundY").num(d.groundY));
+        render.dof = r.get("dof").boolean(d.dof); render.fstop = float(r.get("fstop").num(d.fstop)); render.focusDist = float(r.get("focusDist").num(d.focusDist));
+        render.motionBlur = r.get("motionBlur").boolean(d.motionBlur); render.shutter = float(r.get("shutter").num(d.shutter));
+        render.denoise = r.get("denoise").boolean(d.denoise);
         render.cameraName = r.get("cameraNode").str();
         const Json& c = r.get("camera");
         if (c.size() == 7) {
@@ -714,9 +720,15 @@ bool Graph::fromJson(const Json& j, std::string* error) {
     return true;
 }
 
+static std::string parentDir(const std::string& path) {
+    size_t s = path.find_last_of("/\\");
+    return s == std::string::npos ? std::string(".") : path.substr(0, s);
+}
+
 bool Graph::save(const std::string& path, std::string* error) const {
     std::ofstream f(path, std::ios::binary);
     if (!f) { if (error) *error = "cannot write " + path; return false; }
+    setSceneDirectory(parentDir(path));
     f << toJson().dump(2) << "\n";
     return bool(f);
 }
@@ -724,6 +736,7 @@ bool Graph::save(const std::string& path, std::string* error) const {
 bool Graph::load(const std::string& path, std::string* error) {
     std::ifstream f(path, std::ios::binary);
     if (!f) { if (error) *error = "cannot open " + path; return false; }
+    setSceneDirectory(parentDir(path));
     std::stringstream ss;
     ss << f.rdbuf();
     std::string perr;

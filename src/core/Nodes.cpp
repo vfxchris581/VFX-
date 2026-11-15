@@ -1,5 +1,6 @@
 // Built-in SOP node types.
 #include "GeoIO.h"
+#include "Image.h"
 #include "Node.h"
 #include "Noise.h"
 #include "Ops.h"
@@ -14,6 +15,7 @@ void registerLightNodes(std::vector<NodeType>& types);  // Lights.cpp
 void registerDestructionNodes(std::vector<NodeType>& types); // Destruction.cpp
 void registerFluidNodes(std::vector<NodeType>& types);       // Fluids.cpp
 void registerVellumNodes(std::vector<NodeType>& types);      // Vellum.cpp
+void registerShadingNodes(std::vector<NodeType>& types);     // Shading.cpp
 namespace {
 
 // ---- parameter builders
@@ -37,6 +39,9 @@ ParmDef M(const char* n, const char* l, std::vector<std::string> items, int d = 
 }
 ParmDef C(const char* n, const char* l, const char* d) {
     ParmDef p; p.name = n; p.label = l; p.type = ParmType::Code; p.defStr = d; return p;
+}
+ParmDef FileP(const char* n, const char* l, const char* d, const char* help) {
+    ParmDef p; p.name = n; p.label = l; p.type = ParmType::File; p.defStr = d; p.help = help; return p;
 }
 ParmDef File(const char* n, const char* l, const char* d = "") {
     ParmDef p; p.name = n; p.label = l; p.type = ParmType::File; p.defStr = d; return p;
@@ -846,11 +851,20 @@ std::vector<NodeType> buildTypes() {
 
     {
         NodeType t; t.name = "material"; t.label = "Material"; t.category = "Attributes";
-        t.description = "Sets surface properties for the Render View: color, roughness, metallic and glow.";
+        t.description = "Sets surface properties for the Render View: color, roughness, metallic, glow, glass, subsurface and texture maps.";
         t.minInputs = 1; t.maxInputs = 1;
         t.parms = {M("class", "Apply To", {"Primitives", "Points"}), S("group", "Group", "", "Numbers (0-5 8) or expression (@P.y > 0)"),
                    T("setcolor", "Set Color", false), V("color", "Color", Vec3(0.8f, 0.8f, 0.8f), 0, 1), F("rough", "Roughness", 0.5f, 0, 1),
-                   F("metal", "Metallic", 0, 0, 1), F("emit", "Glow (Emission)", 0, 0, 10)};
+                   F("metal", "Metallic", 0, 0, 1), F("emit", "Glow (Emission)", 0, 0, 10),
+                   F("spec", "Specular", 0.5f, 0, 1, "Strength of the reflective coat on non-metals (0.5 = 4%, typical)"),
+                   F("transmit", "Transmission", 0, 0, 1, "1 = glass or water: light passes through and refracts. Color tints it"),
+                   F("ior", "Index of Refraction", 1.5f, 1, 3, "Glass 1.5, water 1.33, diamond 2.42"),
+                   F("sss", "Subsurface", 0, 0, 1, "Light scatters inside the object (skin, wax, marble). Needs a closed mesh"),
+                   V("sssradius", "Scatter Distance", Vec3(0.1f, 0.05f, 0.02f), 0, 1, "How far red, green and blue light travel inside, in scene units"),
+                   FileP("basemap", "Base Color Map", "", "PNG, EXR or HDR; <UDIM> in the name for tiles. Uses the point uv attribute"),
+                   FileP("roughmap", "Roughness Map", "", "Red channel replaces Roughness"),
+                   FileP("metalmap", "Metallic Map", "", "Red channel replaces Metallic"),
+                   FileP("normalmap", "Normal Map", "", "Tangent-space (OpenGL, green up)")};
         t.parms[3].help = "color";
         t.cook = [](CookContext& c) {
             c.out = c.input(0);
@@ -882,12 +896,30 @@ std::vector<NodeType> buildTypes() {
             Attrib& aR = g.addAttrib(cls, "rough", 1, Vec3(0.5f));
             Attrib& aM = g.addAttrib(cls, "metal", 1);
             Attrib& aE = g.addAttrib(cls, "emit", 1);
+            Attrib& aS = g.addAttrib(cls, "spec", 1, Vec3(0.5f));
+            Attrib& aT = g.addAttrib(cls, "transmit", 1);
+            Attrib& aI = g.addAttrib(cls, "ior", 1, Vec3(1.5f));
+            Attrib& aSss = g.addAttrib(cls, "sss", 1);
+            Attrib& aSssR = g.addAttrib(cls, "sssradius", 3, Vec3(0.1f, 0.05f, 0.02f));
+            const float spec = c.f("spec"), trans = c.f("transmit"), ior = c.f("ior"), sss = c.f("sss");
+            const Vec3 sssR = c.v("sssradius");
+            // texture maps: the attribute holds an id for the file path (0 = none)
+            struct MapP { const char* parm; Attrib* a; int id; };
+            std::vector<MapP> maps;
+            for (const char* mp : {"basemap", "roughmap", "metalmap", "normalmap"}) {
+                const std::string& path = c.s(mp);
+                if (path.empty() && !g.findAttrib(cls, mp)) continue;
+                maps.push_back({mp, &g.addAttrib(cls, mp, 1), registerTexturePath(path)});
+            }
             Cd = c.b("setcolor") ? g.findAttrib(cls, "Cd") : nullptr;
             for (size_t i = 0; i < sel.size(); ++i) {
                 if (!sel[i]) continue;
                 aR.setF(i, rough); aM.setF(i, metal); aE.setF(i, emit);
+                aS.setF(i, spec); aT.setF(i, trans); aI.setF(i, ior); aSss.setF(i, sss); aSssR.setV(i, sssR);
+                for (auto& m : maps) m.a->setF(i, float(m.id));
                 if (Cd) Cd->setV(i, col);
             }
+            if (!maps.empty() && !g.findAttrib(AttribClass::Point, "uv")) c.warning("Texture maps need a point uv attribute (add a UV Project node).");
         };
         add(t);
     }
@@ -944,6 +976,7 @@ std::vector<NodeType> buildTypes() {
     registerDestructionNodes(types);
     registerFluidNodes(types);
     registerVellumNodes(types);
+    registerShadingNodes(types);
     return types;
 }
 
