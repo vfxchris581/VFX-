@@ -1429,6 +1429,15 @@ TEST(image_io) {
         CHECK(zlibDecompress(z.data(), z.size(), o) && o == d);
         if (t % 2 == 0) CHECK(z.size() < d.size() / 4);
     }
+    // decompressing with the exact expected size succeeds; one byte less is refused (size cap)
+    {
+        std::vector<uint8_t> d(4096);
+        for (size_t i = 0; i < d.size(); ++i) d[i] = uint8_t(i % 7);
+        auto z = zlibCompress(d.data(), d.size());
+        std::vector<uint8_t> o2;
+        CHECK(zlibDecompress(z.data(), z.size(), o2, d.size()) && o2 == d);
+        CHECK(!zlibDecompress(z.data(), z.size(), o2, d.size() - 1));
+    }
     std::vector<uint8_t> junk = {0x78, 0x9C, 1, 2, 3, 4, 5, 6};
     std::vector<uint8_t> o;
     CHECK(!zlibDecompress(junk.data(), junk.size(), o));
@@ -1956,10 +1965,14 @@ TEST(rig_bvh_and_timeshift) {
 // ---------------------------------------------------------------- compositing (phase 6)
 
 static const float* px(const Node* n, int x, int y) {
+    static const float none[4] = {-1, -1, -1, -1};
+    if (n->geometry().images.empty() || !n->geometry().images[0].valid()) { CHECK(!"node has no image"); return none; }
     const ImageLayer& L = n->geometry().images[0];
+    if (x < 0 || y < 0 || x >= L.w || y >= L.h) { CHECK(!"pixel outside the image"); return none; }
     return &(*L.rgba)[(size_t(y) * size_t(L.w) + size_t(x)) * 4];
 }
 static double meanChannel(const Node* n, int ch) {
+    if (n->geometry().images.empty() || !n->geometry().images[0].valid()) { CHECK(!"node has no image"); return -1; }
     const ImageLayer& L = n->geometry().images[0];
     double s = 0;
     for (size_t i = 0; i < L.pixels(); ++i) s += (*L.rgba)[i * 4 + size_t(ch)];

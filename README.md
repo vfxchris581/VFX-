@@ -182,6 +182,7 @@ hdc render examples/materials.hdg shot.exr --denoise          # EXR with albedo,
 hdc image examples/comp.hdg comp.$F4.png --frames 1 24        # write a comp sequence
 hdc usd examples/rig.hdg rig.usda --frames 1 48               # animated USD export
 hdc demo terrain my_scene.hdg               # write a demo scene
+hdc bench [--quick]                         # time every major subsystem
 ```
 
 ## Architecture
@@ -210,6 +211,6 @@ A node recooks only when its parameters, inputs or bypass state change, or when 
 6. ~~Fracturing and rigid bodies~~ — done. Next: constraints (hinge, spring, cone twist), concave collision via convex decomposition, debris particles from breaking pieces.
 7. ~~FLIP fluids, ocean and Vellum~~ — done. Next: whitewater (foam/spray/bubbles), surface tension, sparse/narrow-band FLIP, Vellum triangle self-collision, grains and tetrahedral soft bodies.
 8. ~~USD, rigging and animation, compositing~~ — done. Next: USD references/variants and a LOP network, crowds, camera tracking, a dedicated image viewer with channels.
-9. Optimization and stability (Phase 7) — next major phase.
+9. ~~Optimization and stability (Phase 7)~~ — done: benchmarks, sanitizer CI, fuzzing, headless app smoke test, FLIP 2.1x and Vellum 1.5x faster. Next: pyro optimization, viewport texture preview, soak tests.
 4. ~~Path-traced render view~~ and ~~materials, textures, HDRI, DOF, motion blur, EXR, denoising~~ — done. Next for rendering: node-based shader networks, displacement, Cryptomatte, render layers, GPU rendering.
 5. ~~Subnetworks and assets~~ — done. Next: parameters promoted to the outside of a subnet, linked (locked) assets, Python scripting.

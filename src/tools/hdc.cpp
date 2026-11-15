@@ -8,6 +8,8 @@
 #include "core/Usd.h"
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <chrono>
 #include <string>
 
 using namespace hd;
@@ -26,6 +28,7 @@ static void usage() {
         "  hdc image  <scene.hdg> <out.png|out.exr> [--node NAME] [--frame N | --frames A B]\n"
         "             write the image a compositing node makes ($F in the name for sequences)\n"
         "  hdc demo   <name> <out.hdg>                   write a demo scene\n"
+        "  hdc bench  [--quick] [--examples DIR]          time standard simulation and render workloads\n"
         "  hdc demos                                     list demo scenes\n"
         "  hdc nodes                                     list node types\n");
 }
@@ -38,6 +41,107 @@ static const char* opt(int argc, char** argv, const char* name) {
 static bool exportGeo(const std::string& path, const Geometry& g, std::string& err) {
     if (path.size() > 4 && path.substr(path.size() - 4) == ".ply") return savePly(path, g, &err);
     return saveObj(path, g, &err);
+}
+
+
+// ---------------------------------------------------------------- bench
+// Fixed workloads for measuring performance (results are machine dependent; compare runs on one machine).
+static int runBench(const std::string& examplesDir, bool quick) {
+    using clock = std::chrono::steady_clock;
+    struct Row { std::string name; double ms; std::string info; };
+    std::vector<Row> rows;
+    auto timeIt = [&](const std::string& name, const std::function<std::string()>& fn) {
+        auto t0 = clock::now();
+        std::string info = fn();
+        double ms = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
+        rows.push_back({name, ms, info});
+        std::printf("%-22s %10.1f ms   %s\n", name.c_str(), ms, info.c_str());
+        std::fflush(stdout);
+    };
+    auto sim = [&](const char* file, int frames, const char* node) {
+        return [=]() -> std::string {
+            Graph g;
+            std::string err;
+            if (!g.load(examplesDir + "/" + file, &err)) return "load failed: " + err;
+            Node* n = g.findNode(node);
+            if (!n) return std::string("no node ") + node;
+            for (int f = 1; f <= frames; ++f) { g.frame = float(f); g.cook(n); }
+            char b[96];
+            std::snprintf(b, sizeof b, "%d frames, %zu points%s", frames, n->geometry().numPoints(), n->error().empty() ? "" : " (error)");
+            return b;
+        };
+    };
+    const int k = quick ? 1 : 2;
+    timeIt("pop (sparks)", sim("sparks.hdg", 48 * k, "sparks"));
+    timeIt("pyro (smoke)", sim("smoke.hdg", 30 * k, "smoke"));
+    timeIt("rbd (destruction)", sim("destruction.hdg", 30 * k, "rbd"));
+    timeIt("flip (dambreak)", sim("dambreak.hdg", 20 * k, "flip"));
+    timeIt("fluid surface", [&]() -> std::string {
+        Graph g; std::string err;
+        g.load(examplesDir + "/dambreak.hdg", &err);
+        g.frame = 20;
+        Node* n = g.findNode("surface");
+        g.cook(g.findNode("flip"));
+        auto t0 = clock::now();
+        g.cook(n);
+        (void)t0;
+        char b[64]; std::snprintf(b, sizeof b, "%zu triangles", n->geometry().numPrims());
+        return b;
+    });
+    timeIt("vellum (cloth)", sim("cloth.hdg", 36 * k, "vellum"));
+    timeIt("fracture 300 pieces", [&]() -> std::string {
+        Graph g;
+        Node* t = g.createNode("torus");
+        t->parm("rows")->val[0] = 64; t->parm("cols")->val[0] = 32;
+        Node* f = g.createNode("voronoifracture");
+        g.connect(t, f, 0);
+        f->parm("pieces")->val[0] = 300;
+        g.cook(f);
+        char b[64]; std::snprintf(b, sizeof b, "%zu polygons", f->geometry().numPrims());
+        return b;
+    });
+    auto render = [&](const std::string& file, int w, int h, int spp) {
+        return [=]() -> std::string {
+            Graph g; std::string err;
+            if (!g.load(examplesDir + "/" + file, &err)) return "load failed";
+            Node* d = g.displayNode();
+            g.cook(d);
+            RenderSettings r = g.render;
+            r.width = w; r.height = h; r.samples = spp; r.denoise = false;
+            PathTracer pt;
+            pt.start(d->geometry(), r, collectLights(g, g.frame));
+            pt.wait();
+            char b[96]; std::snprintf(b, sizeof b, "%dx%d, %d spp", w, h, spp);
+            return std::string(b);
+        };
+    };
+    timeIt("render (materials)", render("materials.hdg", 320, 180, 16 * k));
+    timeIt("render (destruction)", render("destruction.hdg", 320, 180, 16 * k));
+    timeIt("render 500k triangles", [&]() -> std::string {
+        Graph g;
+        Node* sp = g.createNode("sphere");
+        sp->parm("rows")->val[0] = 500; sp->parm("cols")->val[0] = 1000;
+        Node* m = g.createNode("mountain");
+        g.connect(sp, m, 0);
+        g.cook(m);
+        RenderSettings r;
+        r.width = 320; r.height = 180; r.samples = 8 * k; r.camDist = 4;
+        PathTracer pt;
+        pt.start(m->geometry(), r);
+        pt.wait();
+        char b[64]; std::snprintf(b, sizeof b, "%zu prims", m->geometry().numPrims());
+        return b;
+    });
+    timeIt("comp (render+grade)", [&]() -> std::string {
+        Graph g; std::string err;
+        g.load(examplesDir + "/comp.hdg", &err);
+        g.cook(g.displayNode());
+        return g.displayNode()->error().empty() ? "ok" : g.displayNode()->error();
+    });
+    double total = 0;
+    for (auto& r : rows) total += r.ms;
+    std::printf("%-22s %10.1f ms\n", "TOTAL", total);
+    return 0;
 }
 
 int main(int argc, char** argv) {
@@ -128,6 +232,13 @@ int main(int argc, char** argv) {
             std::printf("frame %d -> %s (%dx%d, %d samples, %.1fs)\n", f, path.c_str(), w, h, pt.samplesDone(), pt.secondsElapsed());
         }
         return 0;
+    }
+    if (cmd == "bench") {
+        std::string dir = "examples";
+        if (const char* d = opt(argc, argv, "--examples")) dir = d;
+        bool quick = false;
+        for (int i = 1; i < argc; ++i) quick |= !std::strcmp(argv[i], "--quick");
+        return runBench(dir, quick);
     }
     if (cmd == "usd" && argc >= 4) {
         Graph g;

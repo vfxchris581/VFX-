@@ -270,13 +270,17 @@ FlipStats flipFrame(MacGrid& g, std::vector<Vec3>& P, std::vector<Vec3>& Vp, flo
         std::fill(g.v.begin(), g.v.end(), 0.f); std::fill(g.vw.begin(), g.vw.end(), 0.f);
         std::fill(g.w.begin(), g.w.end(), 0.f); std::fill(g.ww.begin(), g.ww.end(), 0.f);
         for (size_t i = 0; i < g.cell.size(); ++i) g.cell[i] = g.solidMask[i] ? SOLID : AIR;
-        for (size_t p = 0; p < P.size(); ++p) {
-            splatComp(g.u, g.uw, g.nx + 1, g.ny, g.nz, g.origin, dx, Vec3(0, 0.5f, 0.5f), P[p], Vp[p].x);
-            splatComp(g.v, g.vw, g.nx, g.ny + 1, g.nz, g.origin, dx, Vec3(0.5f, 0, 0.5f), P[p], Vp[p].y);
-            splatComp(g.w, g.ww, g.nx, g.ny, g.nz + 1, g.origin, dx, Vec3(0.5f, 0.5f, 0), P[p], Vp[p].z);
-            int i = int(std::floor((P[p].x - g.origin.x) / dx)), j = int(std::floor((P[p].y - g.origin.y) / dx)), k = int(std::floor((P[p].z - g.origin.z) / dx));
-            if (i >= 0 && j >= 0 && k >= 0 && i < g.nx && j < g.ny && k < g.nz && g.cell[g.ci(i, j, k)] != SOLID) g.cell[g.ci(i, j, k)] = FLUID;
-        }
+        parallelFor(4, [&](int c0, int c1) {
+            for (int comp = c0; comp < c1; ++comp) {
+                if (comp == 0) for (size_t p = 0; p < P.size(); ++p) splatComp(g.u, g.uw, g.nx + 1, g.ny, g.nz, g.origin, dx, Vec3(0, 0.5f, 0.5f), P[p], Vp[p].x);
+                else if (comp == 1) for (size_t p = 0; p < P.size(); ++p) splatComp(g.v, g.vw, g.nx, g.ny + 1, g.nz, g.origin, dx, Vec3(0.5f, 0, 0.5f), P[p], Vp[p].y);
+                else if (comp == 2) for (size_t p = 0; p < P.size(); ++p) splatComp(g.w, g.ww, g.nx, g.ny, g.nz + 1, g.origin, dx, Vec3(0.5f, 0.5f, 0), P[p], Vp[p].z);
+                else for (size_t p = 0; p < P.size(); ++p) {
+                    int i = int(std::floor((P[p].x - g.origin.x) / dx)), j = int(std::floor((P[p].y - g.origin.y) / dx)), k = int(std::floor((P[p].z - g.origin.z) / dx));
+                    if (i >= 0 && j >= 0 && k >= 0 && i < g.nx && j < g.ny && k < g.nz && g.cell[g.ci(i, j, k)] != SOLID) g.cell[g.ci(i, j, k)] = FLUID;
+                }
+            }
+        });
         auto normalizeComp = [](std::vector<float>& f, const std::vector<float>& wsum) {
             for (size_t i = 0; i < f.size(); ++i) f[i] = wsum[i] > 1e-6f ? f[i] / wsum[i] : 0.f;
         };
@@ -442,29 +446,57 @@ FlipStats flipFrame(MacGrid& g, std::vector<Vec3>& P, std::vector<Vec3>& Vp, flo
         // ---- separation: push apart particles closer than their rest spacing (positions only, so no energy
         // is added). This is what keeps FLIP from slowly losing volume as particles bunch up.
         if (fp.volumeCorrection > 0 && !P.empty()) {
+            // uniform grid with cells of the rest spacing, filled by counting sort (no hashing)
             const float r = dx * 0.5f; // rest spacing for 8 particles per voxel
             const float inv = 1.f / r;
-            std::unordered_map<int64_t, std::vector<int>> hash;
-            hash.reserve(P.size() / 2);
-            auto key = [](int a, int b2, int c2) { return (int64_t(a) * 73856093) ^ (int64_t(b2) * 19349663) ^ (int64_t(c2) * 83492791); };
-            for (size_t p = 0; p < P.size(); ++p)
-                hash[key(int(std::floor(P[p].x * inv)), int(std::floor(P[p].y * inv)), int(std::floor(P[p].z * inv)))].push_back(int(p));
+            const int gx = g.nx * 2 + 2, gy = g.ny * 2 + 2 + (fp.openTop ? 64 : 0), gz = g.nz * 2 + 2;
+            auto cellOf = [&](const Vec3& x, int& cx, int& cy, int& cz) {
+                cx = std::clamp(int(std::floor((x.x - g.origin.x) * inv)) + 1, 0, gx - 1);
+                cy = std::clamp(int(std::floor((x.y - g.origin.y) * inv)) + 1, 0, gy - 1);
+                cz = std::clamp(int(std::floor((x.z - g.origin.z) * inv)) + 1, 0, gz - 1);
+            };
+            const size_t ncell = size_t(gx) * size_t(gy) * size_t(gz);
+            std::vector<int> cellStart(ncell + 1, 0), cellIdx(P.size()), sorted(P.size());
+            for (size_t p = 0; p < P.size(); ++p) {
+                int cx, cy, cz;
+                cellOf(P[p], cx, cy, cz);
+                int c = cx + gx * (cy + gy * cz);
+                cellIdx[p] = c;
+                cellStart[size_t(c) + 1]++;
+            }
+            for (size_t c = 0; c < ncell; ++c) cellStart[c + 1] += cellStart[c];
+            {
+                std::vector<int> fill(cellStart.begin(), cellStart.end() - 1);
+                for (size_t p = 0; p < P.size(); ++p) sorted[size_t(fill[size_t(cellIdx[p])]++)] = int(p);
+            }
             std::vector<Vec3> push(P.size(), Vec3(0));
             parallelFor(int(P.size()), [&](int b0, int b1) {
                 for (int p = b0; p < b1; ++p) {
                     const Vec3 x = P[size_t(p)];
-                    int a = int(std::floor(x.x * inv)), bb = int(std::floor(x.y * inv)), cc = int(std::floor(x.z * inv));
+                    int cx, cy, cz;
+                    cellOf(x, cx, cy, cz);
                     Vec3 acc(0);
-                    for (int dz = -1; dz <= 1; ++dz) for (int dy = -1; dy <= 1; ++dy) for (int dxx = -1; dxx <= 1; ++dxx) {
-                        auto it = hash.find(key(a + dxx, bb + dy, cc + dz));
-                        if (it == hash.end()) continue;
-                        for (int q : it->second) {
-                            if (q == p) continue;
-                            Vec3 d = x - P[size_t(q)];
-                            float l = length(d);
-                            if (l >= r) continue;
-                            if (l < 1e-7f) { d = Vec3(hashRandom(uint32_t(p) * 3u) - 0.5f, hashRandom(uint32_t(p) * 3u + 1u) - 0.5f, hashRandom(uint32_t(p) * 3u + 2u) - 0.5f); l = length(d) + 1e-7f; }
-                            acc += d / l * (0.5f * (r - l));
+                    for (int dz = -1; dz <= 1; ++dz) {
+                        int zz = cz + dz;
+                        if (zz < 0 || zz >= gz) continue;
+                        for (int dy = -1; dy <= 1; ++dy) {
+                            int yy = cy + dy;
+                            if (yy < 0 || yy >= gy) continue;
+                            for (int dxx = -1; dxx <= 1; ++dxx) {
+                                int xx = cx + dxx;
+                                if (xx < 0 || xx >= gx) continue;
+                                size_t c = size_t(xx) + size_t(gx) * (size_t(yy) + size_t(gy) * size_t(zz));
+                                for (int k = cellStart[c]; k < cellStart[c + 1]; ++k) {
+                                    int q = sorted[size_t(k)];
+                                    if (q == p) continue;
+                                    Vec3 d = x - P[size_t(q)];
+                                    float l2 = dot(d, d);
+                                    if (l2 >= r * r) continue;
+                                    float l = std::sqrt(l2);
+                                    if (l < 1e-7f) { d = Vec3(hashRandom(uint32_t(p) * 3u) - 0.5f, hashRandom(uint32_t(p) * 3u + 1u) - 0.5f, hashRandom(uint32_t(p) * 3u + 2u) - 0.5f); l = length(d) + 1e-7f; }
+                                    acc += d / l * (0.5f * (r - l));
+                                }
+                            }
                         }
                     }
                     push[size_t(p)] = acc * fp.volumeCorrection;

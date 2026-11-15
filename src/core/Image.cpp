@@ -89,7 +89,7 @@ const int kLExt[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 
 const int kDBase[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
 const int kDExt[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
 
-bool inflateRaw(const uint8_t* d, size_t n, std::vector<uint8_t>& out) {
+bool inflateRaw(const uint8_t* d, size_t n, std::vector<uint8_t>& out, size_t maxOut) {
     BitIn in{d, n};
     int last;
     do {
@@ -101,7 +101,7 @@ bool inflateRaw(const uint8_t* d, size_t n, std::vector<uint8_t>& out) {
             if (in.pos + 4 > n) return false;
             unsigned len = d[in.pos] | (d[in.pos + 1] << 8), nlen = d[in.pos + 2] | (d[in.pos + 3] << 8);
             in.pos += 4;
-            if (len != (~nlen & 0xFFFF) || in.pos + len > n) return false;
+            if (len != (~nlen & 0xFFFF) || in.pos + len > n || out.size() + len > maxOut) return false;
             out.insert(out.end(), d + in.pos, d + in.pos + len);
             in.pos += len;
             continue;
@@ -144,7 +144,10 @@ bool inflateRaw(const uint8_t* d, size_t n, std::vector<uint8_t>& out) {
         for (;;) {
             int sym = in.decode(lit);
             if (sym < 0 || in.err) return false;
-            if (sym < 256) out.push_back(uint8_t(sym));
+            if (sym < 256) {
+                if (out.size() >= maxOut) return false; // larger than the caller allows (corrupt data or a zip bomb)
+                out.push_back(uint8_t(sym));
+            }
             else if (sym == 256) break;
             else {
                 sym -= 257;
@@ -153,7 +156,7 @@ bool inflateRaw(const uint8_t* d, size_t n, std::vector<uint8_t>& out) {
                 int ds = in.decode(dist);
                 if (ds < 0 || ds >= 30) return false;
                 size_t back = size_t(kDBase[ds] + in.bits(kDExt[ds]));
-                if (in.err || back > out.size()) return false;
+                if (in.err || back > out.size() || out.size() + size_t(len) > maxOut) return false;
                 size_t from = out.size() - back;
                 for (int i = 0; i < len; ++i) out.push_back(out[from + size_t(i)]);
             }
@@ -274,6 +277,11 @@ bool writeFile(const std::string& path, const std::vector<uint8_t>& data, std::s
 
 inline float srgbToLin(float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
 
+// Largest images the readers accept: guards against corrupt headers asking for absurd allocations.
+constexpr int kMaxDim = 65536;
+constexpr size_t kMaxPixels = size_t(1) << 28;
+bool sizeOk(long long w, long long h) { return w > 0 && h > 0 && w <= kMaxDim && h <= kMaxDim && size_t(w) * size_t(h) <= kMaxPixels; }
+
 std::string lower(std::string s) { for (auto& ch : s) ch = char(std::tolower((unsigned char)ch)); return s; }
 bool endsWith(const std::string& s, const char* suf) { size_t n = std::strlen(suf); return s.size() >= n && lower(s.substr(s.size() - n)) == suf; }
 
@@ -290,9 +298,11 @@ std::vector<uint8_t> zlibCompress(const uint8_t* data, size_t n, int level) {
 
 bool zlibDecompress(const uint8_t* data, size_t n, std::vector<uint8_t>& out, size_t expected) {
     out.clear();
-    if (expected) out.reserve(expected);
+    // with an expected size, output may not exceed it; otherwise allow up to 1 GB
+    const size_t maxOut = expected ? expected : (size_t(1) << 30);
+    if (expected) out.reserve(std::min<size_t>(expected, size_t(64) << 20));
     if (n < 6 || (data[0] & 0x0F) != 8 || ((data[0] << 8) | data[1]) % 31 != 0) return false;
-    if (!inflateRaw(data + 2, n - 6, out)) return false;
+    if (!inflateRaw(data + 2, n - 6, out, maxOut)) return false;
     uint32_t a = (uint32_t(data[n - 4]) << 24) | (uint32_t(data[n - 3]) << 16) | (uint32_t(data[n - 2]) << 8) | data[n - 1];
     return a == adler32(out.data(), out.size());
 }
@@ -419,6 +429,7 @@ bool readPng(const std::vector<uint8_t>& f, Image& img, bool srgb, std::string* 
         p += 12 + len;
     }
     if (w <= 0 || h <= 0) return fail("PNG has no image header");
+    if (!sizeOk(w, h)) return fail("PNG is too large or its header is corrupt");
     if (interlace) return fail("Interlaced PNGs are not supported; re-save without interlacing");
     int spp = ctype == 0 ? 1 : ctype == 2 ? 3 : ctype == 3 ? 1 : ctype == 4 ? 2 : ctype == 6 ? 4 : 0;
     if (!spp || !(depth == 1 || depth == 2 || depth == 4 || depth == 8 || depth == 16)) return fail("Unsupported PNG format");
@@ -499,6 +510,7 @@ bool readHdr(const std::vector<uint8_t>& f, Image& img, std::string* err) {
     char ya[3] = {0}, xa[3] = {0};
     if (std::sscanf(res.c_str(), "%2s %d %2s %d", ya, &h, xa, &w) != 4 || std::string(ya) != "-Y" || std::string(xa) != "+X" || w <= 0 || h <= 0)
         return fail("Unsupported HDR orientation");
+    if (!sizeOk(w, h)) return fail("HDR is too large or its header is corrupt");
     img.w = w; img.h = h; img.c = 3;
     img.px.assign(size_t(w) * size_t(h) * 3, 0.f);
     std::vector<uint8_t> scan(size_t(w) * 4);
@@ -670,8 +682,11 @@ bool readExrChannels(const std::string& path, int& w, int& h, std::vector<std::p
         p += sz;
     }
     if (comp != 0 && comp != 2 && comp != 3) return fail("EXR compression not supported (use ZIP, ZIPS or none)");
-    w = xmax - xmin + 1; h = ymax - ymin + 1;
+    const long long lw = (long long)xmax - xmin + 1, lh = (long long)ymax - ymin + 1;
+    if (lw <= 0 || lh <= 0 || lw > kMaxDim || lh > kMaxDim) return fail("EXR data window is empty, too large or corrupt");
+    w = int(lw); h = int(lh);
     if (w <= 0 || h <= 0 || chans.empty()) return fail("Empty EXR");
+    if (!sizeOk(w, h) || chans.size() > 64 || size_t(w) * size_t(h) * chans.size() > (size_t(1) << 30)) return fail("EXR is too large or its header is corrupt");
     const int lines = comp == 3 ? 16 : 1;
     const int chunks = (h + lines - 1) / lines;
     if (p + size_t(chunks) * 8 > f.size()) return fail("Truncated EXR offsets");
@@ -684,7 +699,9 @@ bool readExrChannels(const std::string& path, int& w, int& h, std::vector<std::p
     for (int ci = 0; ci < chunks; ++ci) {
         size_t q = size_t(offs[size_t(ci)]);
         if (q + 8 > f.size()) return fail("Bad EXR chunk offset");
-        int y0 = int(getU32(&f[q])) - ymin;
+        long long ly0 = (long long)int32_t(getU32(&f[q])) - ymin;
+        if (ly0 < 0 || ly0 >= h) return fail("Bad EXR chunk");
+        int y0 = int(ly0);
         uint32_t sz = getU32(&f[q + 4]);
         if (q + 8 + sz > f.size() || y0 < 0 || y0 >= h) return fail("Bad EXR chunk");
         int nl = std::min(lines, h - y0);

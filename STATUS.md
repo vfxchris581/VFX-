@@ -109,6 +109,25 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 |---|---|
 | Automated core tests | Working: about 900,000 checks covering geometry, the node graph, every solver, the renderer and every example scene |
 | CI on macOS, Windows and Linux | Working: every push builds, tests and packages |
+| Sanitizers | Working: a CI job builds with AddressSanitizer + UndefinedBehaviorSanitizer and runs the full test suite and the fuzzer. Local run: all ~900,000 checks clean |
+| Fuzzing | Working: `hd_fuzz` mutates valid inputs for zlib, PNG, EXR, HDR (flat + RLE), BVH, USDA, OBJ, scene JSON, expressions and VEX. 280,000 inputs under ASan/UBSan found and fixed: a 51 GB allocation from a corrupt PNG header, unbounded inflate output, and signed overflows in EXR data windows. Decoders now cap dimensions (65,536) and pixels (2^28) |
+| App smoke test | Working: `hd_ui_smoke` runs the real application headless (GLFW null platform + Mesa EGL), opens all 18 example scenes, plays frames, opens Render Settings, Render View and the comp viewer, stress-tests undo/redo, fails on any node error or OpenGL error, and saves screenshots (uploaded as a CI artifact) |
+| Benchmarks | Working: `hdc bench` times every major subsystem |
+| Performance | Improved, see below |
+| Viewport textures / glass preview | Not done: the OpenGL viewport shows base colour only; textures, glass and SSS appear only in the path-traced Render View |
+| Memory-leak / long-session soak tests, GPU profiling | Planned |
+
+### Measured speedups (`hdc bench`, same machine, before vs after Phase 7)
+
+| Workload | Before | After | Change |
+|---|---|---|---|
+| FLIP dam break, 40 frames, 92k particles | 12,066 ms | 5,775 ms | 2.1x faster (parallel particle-to-grid, sorted-grid particle separation) |
+| Fluid surface (includes the FLIP cook) | 6,397 ms | 3,319 ms | 1.9x |
+| Vellum cloth, 72 frames | 5,054 ms | 3,336 ms | 1.5x (sorted-bucket self-collision) |
+| Render, materials scene | 2,000 ms | 1,857 ms | 7% (binned SAH BVH, near-child-first traversal) |
+| Render, 500k triangles | 1,162 ms | 1,145 ms | ~same (time is dominated by geometry generation) |
+| Pyro smoke, 60 frames | 4,453 ms | 4,448 ms | unchanged (not optimized yet) |
+| All workloads | 33,553 ms | 22,109 ms | 34% less time |
 
 ## Phase 8: installers
 

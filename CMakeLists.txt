@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(HD VERSION 0.5.0 LANGUAGES C CXX)
+project(HD VERSION 0.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,6 +60,10 @@ if(HD_BUILD_TESTS)
   target_link_libraries(hd_tests PRIVATE hd_core)
   target_compile_definitions(hd_tests PRIVATE HD_EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/examples")
   add_test(NAME hd_tests COMMAND hd_tests)
+  # mutation fuzzing of every parser (more iterations in the sanitizer CI job)
+  add_executable(hd_fuzz tests/fuzz.cpp)
+  target_link_libraries(hd_fuzz PRIVATE hd_core)
+  add_test(NAME hd_fuzz COMMAND hd_fuzz 300)
 endif()
 
 # ------------------------------------------------------------------ renderer (OpenGL 3.3 core)
@@ -151,6 +155,8 @@ if(HD_BUILD_APP)
   if(HD_BUILD_UI_SCREENSHOT_TEST AND UNIX AND NOT APPLE)
     add_executable(hd_ui_screenshot tests/ui_screenshot.cpp)
     target_link_libraries(hd_ui_screenshot PRIVATE hd_app ${CMAKE_DL_LIBS})
+    add_executable(hd_ui_smoke tests/ui_smoke.cpp)
+    target_link_libraries(hd_ui_smoke PRIVATE hd_app ${CMAKE_DL_LIBS})
   endif()
 
   # Ship example scenes next to the executable

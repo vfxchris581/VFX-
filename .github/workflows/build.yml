@@ -112,3 +112,58 @@ jobs:
             dist/*.zip
             dist/*.exe
             dist/*.tar.gz
+
+  sanitizers:
+    name: Sanitizers + fuzzing (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with AddressSanitizer and UndefinedBehaviorSanitizer
+        run: |
+          cmake -S . -B build-asan -DHD_BUILD_APP=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-asan --parallel
+      - name: Core tests under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ./build-asan/hd_tests
+      - name: Fuzz every parser (3000 mutated inputs per target)
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+        run: |
+          mkdir -p fuzzwork && cd fuzzwork
+          ../build-asan/hd_fuzz 3000 ${{ github.run_number }}
+
+  app-smoke:
+    name: App smoke test (Linux, headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Mesa (software OpenGL) and fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1-mesa-dri libegl-mesa0 fonts-dejavu-core
+      - name: Build the app for GLFW's null platform
+        run: |
+          cmake -S . -B build-ui -DCMAKE_BUILD_TYPE=Release -DGLFW_BUILD_X11=OFF -DGLFW_BUILD_WAYLAND=OFF \
+            -DHD_BUILD_UI_SCREENSHOT_TEST=ON -DHD_BUILD_TESTS=OFF
+          cmake --build build-ui --parallel --target hd_ui_smoke
+      - name: Load every example in the real UI, render, undo/redo
+        run: ./build-ui/hd_ui_smoke examples smoke-shots 8
+      - name: Convert screenshots
+        if: always()
+        run: |
+          python3 -m pip install --quiet pillow || true
+          python3 - <<'PY' || true
+          import glob
+          from PIL import Image
+          for p in glob.glob('smoke-shots/*.ppm'):
+              Image.open(p).save(p[:-4] + '.png')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: HD-UI-screenshots
+          path: smoke-shots/*.png

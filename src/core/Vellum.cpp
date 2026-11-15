@@ -157,25 +157,50 @@ void collide(std::vector<Vec3>& x, const std::vector<Vec3>& xprev, const VellumS
         }
     }
     if (sp.self && th > 0) {
-        // point-point repulsion with a spatial hash; neighbours connected by an edge are skipped
+        // point-point repulsion. Points are bucketed into a hashed grid by counting sort (flat arrays, no
+        // per-substep allocations of node lists); neighbours connected by an edge or bend are skipped.
         const float cs = 2 * th;
-        std::unordered_map<int64_t, std::vector<int>> hash;
-        auto key = [](int a, int b, int c) { return (int64_t(a) * 73856093) ^ (int64_t(b) * 19349663) ^ (int64_t(c) * 83492791); };
-        for (size_t i = 0; i < n; ++i)
-            hash[key(int(std::floor(x[i].x / cs)), int(std::floor(x[i].y / cs)), int(std::floor(x[i].z / cs)))].push_back(int(i));
+        const float inv = 1.f / cs;
+        size_t nb = 1;
+        while (nb < n * 2) nb <<= 1;
+        const size_t mask = nb - 1;
+        auto bucket = [&](int a, int b, int c) { return size_t((uint32_t(a) * 73856093u) ^ (uint32_t(b) * 19349663u) ^ (uint32_t(c) * 83492791u)) & mask; };
+        std::vector<int> start(nb + 1, 0), order(n), cellOfPt(n);
+        for (size_t i = 0; i < n; ++i) {
+            size_t bk = bucket(int(std::floor(x[i].x * inv)), int(std::floor(x[i].y * inv)), int(std::floor(x[i].z * inv)));
+            cellOfPt[i] = int(bk);
+            start[bk + 1]++;
+        }
+        for (size_t k = 0; k < nb; ++k) start[k + 1] += start[k];
+        {
+            std::vector<int> fill(start.begin(), start.end() - 1);
+            for (size_t i = 0; i < n; ++i) order[size_t(fill[size_t(cellOfPt[i])]++)] = int(i);
+        }
         const float minD = 2 * th;
         for (size_t i = 0; i < n; ++i) {
-            int a = int(std::floor(x[i].x / cs)), b = int(std::floor(x[i].y / cs)), c = int(std::floor(x[i].z / cs));
+            int a = int(std::floor(x[i].x * inv)), b = int(std::floor(x[i].y * inv)), c = int(std::floor(x[i].z * inv));
+            size_t bks[27];
+            int nbk = 0;
+            // Cells that hash to the same bucket are visited once. Collisions are rare, so a
+            // linear scan over at most 26 earlier ids beats sorting.
             for (int dz = -1; dz <= 1; ++dz) for (int dy = -1; dy <= 1; ++dy) for (int dxx = -1; dxx <= 1; ++dxx) {
-                auto it = hash.find(key(a + dxx, b + dy, c + dz));
-                if (it == hash.end()) continue;
-                for (int j : it->second) {
+                size_t id = bucket(a + dxx, b + dy, c + dz);
+                if (start[id] == start[id + 1]) continue; // empty bucket
+                bool dup = false;
+                for (int q = 0; q < nbk; ++q) if (bks[q] == id) { dup = true; break; }
+                if (!dup) bks[nbk++] = id;
+            }
+            for (int q = 0; q < nbk; ++q) {
+                size_t bk = bks[q];
+                for (int k = start[bk]; k < start[bk + 1]; ++k) {
+                    int j = order[size_t(k)];
                     if (j <= int(i)) continue;
-                    const auto& nb = su.neighbors[i];
-                    if (std::binary_search(nb.begin(), nb.end(), j)) continue;
                     Vec3 d = x[i] - x[size_t(j)];
-                    float l = length(d);
-                    if (l >= minD || l < 1e-9f) continue;
+                    float l2 = dot(d, d);
+                    if (l2 >= minD * minD || l2 < 1e-18f) continue;
+                    const auto& nbs = su.neighbors[i];
+                    if (std::binary_search(nbs.begin(), nbs.end(), j)) continue;
+                    float l = std::sqrt(l2);
                     float wi = su.invMass[i], wj = su.invMass[size_t(j)];
                     if (wi + wj == 0) continue;
                     Vec3 corr = d / l * (minD - l) / (wi + wj);

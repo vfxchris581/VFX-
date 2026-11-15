@@ -315,9 +315,20 @@ void App::drawParameters() {
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Node Info", ImGuiTreeNodeFlags_DefaultOpen)) {
         const Geometry& g = n->geometry();
-        ImGui::Text("%zu points   %zu primitives   %zu vertices", g.numPoints(), g.numPrims(), g.numVertices());
+        const bool imageOnly = !g.images.empty() && g.numPoints() == 0;
+        if (!imageOnly) ImGui::Text("%zu points   %zu primitives   %zu vertices", g.numPoints(), g.numPrims(), g.numVertices());
+        for (auto& im : g.images) {
+            if (!im.valid()) continue;
+            // average colour, handy when grading
+            double s[4] = {0, 0, 0, 0};
+            const std::vector<float>& px = *im.rgba;
+            for (size_t i = 0; i < im.pixels(); ++i) for (int k = 0; k < 4; ++k) s[k] += px[i * 4 + size_t(k)];
+            for (double& v : s) v /= double(std::max<size_t>(1, im.pixels()));
+            ImGui::Text("Image  %d x %d  RGBA%s", im.w, im.h, im.depth ? " + Z (depth)" : "");
+            ImGui::TextDisabled("Average  R %.3f  G %.3f  B %.3f  A %.3f  (linear, premultiplied)", s[0], s[1], s[2], s[3]);
+        }
         ImGui::TextDisabled("Cook: %.2f ms%s", n->cookTimeMs(), n->isTimeDependent() ? "   (time dependent)" : "");
-        if (n->cookStamp()) {
+        if (n->cookStamp() && !imageOnly) {
             Vec3 mn, mx;
             g.bounds(mn, mx);
             ImGui::TextDisabled("Bounds  min (%.3g, %.3g, %.3g)  max (%.3g, %.3g, %.3g)", mn.x, mn.y, mn.z, mx.x, mx.y, mx.z);
@@ -327,7 +338,7 @@ void App::drawParameters() {
         std::string pa, qa;
         for (auto& [k, a] : g.pointAttribs) pa += k + (a.tuple == 3 ? "[3] " : " ");
         for (auto& [k, a] : g.primAttribs) qa += k + (a.tuple == 3 ? "[3] " : " ");
-        ImGui::TextDisabled("Point attributes: P[3] %s", pa.c_str());
+        if (!imageOnly) ImGui::TextDisabled("Point attributes: P[3] %s", pa.c_str());
         if (!qa.empty()) ImGui::TextDisabled("Primitive attributes: %s", qa.c_str());
         int nin = 0;
         for (Node* in : n->inputs) if (in) ++nin;

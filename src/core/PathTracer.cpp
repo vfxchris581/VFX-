@@ -636,9 +636,62 @@ struct Scene {
                 nodes[size_t(j.node)].count = j.hi - j.lo;
                 continue;
             }
-            int mid = (j.lo + j.hi) / 2;
-            std::nth_element(order.begin() + j.lo, order.begin() + mid, order.begin() + j.hi,
-                             [&](int a, int b) { return cen[size_t(a)][axis] < cen[size_t(b)][axis]; });
+            // binned surface area heuristic: pick the split that minimises area x count on both sides
+            const int NB = 16;
+            struct Bin { Vec3 mn{1e30f}, mx{-1e30f}; int n = 0; };
+            auto area = [](const Vec3& mn2, const Vec3& mx2) { Vec3 d = vmax(mx2 - mn2, Vec3(0)); return d.x * d.y + d.y * d.z + d.z * d.x; };
+            float bestCost = 1e30f;
+            int bestAxis = axis, bestSplit = -1;
+            for (int ax = axis; ax == axis; ++ax) { // the widest axis only: nearly as good, a third of the cost
+                if (ext[ax] < 1e-12f) continue;
+                Bin bins[NB];
+                const float scale = float(NB) / ext[ax];
+                for (int i = j.lo; i < j.hi; ++i) {
+                    int id = order[size_t(i)];
+                    int b2 = std::min(NB - 1, int((cen[size_t(id)][ax] - cmn[ax]) * scale));
+                    bins[b2].n++;
+                    bins[b2].mn = vmin(bins[b2].mn, bmn[size_t(id)]);
+                    bins[b2].mx = vmax(bins[b2].mx, bmx[size_t(id)]);
+                }
+                float rightArea[NB];
+                int rightCount[NB];
+                Vec3 rmn(1e30f), rmx(-1e30f);
+                int rc = 0;
+                for (int b2 = NB - 1; b2 > 0; --b2) {
+                    rmn = vmin(rmn, bins[b2].mn); rmx = vmax(rmx, bins[b2].mx); rc += bins[b2].n;
+                    rightArea[b2] = rc ? area(rmn, rmx) : 0.f; rightCount[b2] = rc;
+                }
+                Vec3 lmn(1e30f), lmx(-1e30f);
+                int lc = 0;
+                for (int b2 = 0; b2 < NB - 1; ++b2) {
+                    lmn = vmin(lmn, bins[b2].mn); lmx = vmax(lmx, bins[b2].mx); lc += bins[b2].n;
+                    if (lc == 0 || rightCount[b2 + 1] == 0) continue;
+                    float cost = area(lmn, lmx) * float(lc) + rightArea[b2 + 1] * float(rightCount[b2 + 1]);
+                    if (cost < bestCost) { bestCost = cost; bestAxis = ax; bestSplit = b2; }
+                }
+            }
+            const int count = j.hi - j.lo;
+            const float leafCost = area(mn, mx) * float(count);
+            int mid;
+            if (bestSplit < 0 || (count <= 8 && bestCost >= leafCost)) {
+                if (bestSplit < 0) {
+                    // all centroids in one bin: fall back to a median split
+                    mid = (j.lo + j.hi) / 2;
+                    std::nth_element(order.begin() + j.lo, order.begin() + mid, order.begin() + j.hi,
+                                     [&](int a2, int b2) { return cen[size_t(a2)][axis] < cen[size_t(b2)][axis]; });
+                } else {
+                    nodes[size_t(j.node)].first = j.lo;
+                    nodes[size_t(j.node)].count = count;
+                    continue;
+                }
+            } else {
+                const float scale = float(NB) / ext[bestAxis];
+                auto it = std::partition(order.begin() + j.lo, order.begin() + j.hi, [&](int id) {
+                    return std::min(NB - 1, int((cen[size_t(id)][bestAxis] - cmn[bestAxis]) * scale)) <= bestSplit;
+                });
+                mid = int(it - order.begin());
+                if (mid == j.lo || mid == j.hi) mid = (j.lo + j.hi) / 2;
+            }
             int l = int(nodes.size());
             nodes.push_back(BvhNode());
             nodes.push_back(BvhNode());
@@ -650,7 +703,7 @@ struct Scene {
     }
 
     // ------------------------------------------------------------ intersection
-    static bool slab(const Vec3& mn, const Vec3& mx, const Ray& r, const Vec3& inv, float tmax) {
+    static bool slab(const Vec3& mn, const Vec3& mx, const Ray& r, const Vec3& inv, float tmax, float* tEnter = nullptr) {
         float t0 = 0, t1 = tmax;
         for (int a = 0; a < 3; ++a) {
             float ta = (mn[a] - r.o[a]) * inv[a], tb = (mx[a] - r.o[a]) * inv[a];
@@ -658,6 +711,7 @@ struct Scene {
             t0 = std::max(t0, ta); t1 = std::min(t1, tb);
             if (t0 > t1) return false;
         }
+        if (tEnter) *tEnter = t0;
         return true;
     }
 
@@ -706,21 +760,33 @@ struct Scene {
         Vec3 inv(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
         int stack[64];
         int sp = 0;
+        if (!slab(nodes[0].mn, nodes[0].mx, r, inv, h.t)) return false;
         stack[sp++] = 0;
         bool found = false;
         while (sp) {
             const BvhNode& n = nodes[size_t(stack[--sp])];
-            if (!slab(n.mn, n.mx, r, inv, h.t)) continue;
             if (n.count) {
                 for (int i = 0; i < n.count; ++i)
                     if (hitPrim(order[size_t(n.first + i)], r, h)) {
                         found = true;
                         if (any) return true;
                     }
-            } else if (sp < 62) {
-                stack[sp++] = n.left;
-                stack[sp++] = n.right;
+                continue;
             }
+            // visit the nearer child first; children beyond the current hit are skipped
+            float tl = 0, tr = 0;
+            bool hl = slab(nodes[size_t(n.left)].mn, nodes[size_t(n.left)].mx, r, inv, h.t, &tl);
+            bool hr = slab(nodes[size_t(n.right)].mn, nodes[size_t(n.right)].mx, r, inv, h.t, &tr);
+            if (sp > 60) { // pathological depth: keep it safe
+                if (hl) stack[sp++] = n.left;
+                else if (hr) stack[sp++] = n.right;
+                continue;
+            }
+            if (hl && hr) {
+                if (tl <= tr) { stack[sp++] = n.right; stack[sp++] = n.left; }
+                else { stack[sp++] = n.left; stack[sp++] = n.right; }
+            } else if (hl) stack[sp++] = n.left;
+            else if (hr) stack[sp++] = n.right;
         }
         return found;
     }

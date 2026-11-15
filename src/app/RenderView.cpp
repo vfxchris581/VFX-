@@ -97,7 +97,7 @@ void App::drawRenderSettings() {
         ImGui::BeginDisabled(!rs.motionBlur);
         ch |= ImGui::SliderFloat("Shutter (frames)", &rs.shutter, 0.f, 1.f);
         ImGui::EndDisabled();
-        ImGui::SeparatorText("Output");
+        ImGui::SeparatorText("Image");
         ch |= ImGui::Checkbox("Denoise Final Image", &rs.denoise);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Smooths the remaining noise when the render finishes (uses the albedo, normal and depth passes)");
         ImGui::TextDisabled("Camera nodes with Depth of Field on use their own\nf-stop and focus. Save as .exr to keep every pass.\nChanges apply to the next render.");
