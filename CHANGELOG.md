@@ -3,6 +3,11 @@
 Version numbers follow the build phases. Each release lists what changed; STATUS.md lists
 what works, what is partial and what is planned.
 
+## Unreleased
+
+- Viewport material preview: roughness, metal, emission, SSS and glass from Material nodes, plus base colour, roughness, metallic and normal maps (UDIM too). Toggle with "Mat" in the viewport toolbar or Display Options; textures that fail to load are listed in the viewport.
+- Pyro: about 1.25x faster with bit-identical results (branch-free interior pressure solve).
+
 ## 0.7.0
 
 Phase 8: installers and releases.

@@ -86,6 +86,13 @@ typedef std::ptrdiff_t GLintptr;
 #define GL_DEPTH_STENCIL 0x84F9
 #define GL_UNSIGNED_INT_24_8 0x84FA
 #define GL_UNPACK_ALIGNMENT 0x0CF5
+#define GL_TEXTURE_2D_ARRAY 0x8C1A
+#define GL_ZERO 0
+#define GL_SRC_COLOR 0x0300
+#define GL_RGBA16F 0x881A
+#define GL_REPEAT 0x2901
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#define GL_MAX_TEXTURE_SIZE 0x0D33
 
 #define HD_GL_FUNCTIONS(X) \
     X(const GLubyte*, glGetString, (GLenum name)) \
@@ -154,7 +161,9 @@ typedef std::ptrdiff_t GLintptr;
     X(void, glActiveTexture, (GLenum unit)) \
     X(void, glTexImage3D, (GLenum target, GLint level, GLint ifmt, GLsizei w, GLsizei h, GLsizei d, GLint border, GLenum fmt, GLenum type, const void* data)) \
     X(void, glCullFace, (GLenum mode)) \
-    X(void, glUniform2f, (GLint l, GLfloat x, GLfloat y))
+    X(void, glUniform2f, (GLint l, GLfloat x, GLfloat y)) \
+    X(void, glUniform1iv, (GLint l, GLsizei n, const GLint* v)) \
+    X(void, glGenerateMipmap, (GLenum target))
 
 #define HD_GL_DECLARE(ret, name, args) typedef ret(HD_APIENTRY* PFN_hd_##name) args; extern PFN_hd_##name hd_##name;
 HD_GL_FUNCTIONS(HD_GL_DECLARE)
@@ -228,6 +237,8 @@ HD_GL_FUNCTIONS(HD_GL_DECLARE)
 #define glTexImage3D hd_glTexImage3D
 #define glCullFace hd_glCullFace
 #define glUniform2f hd_glUniform2f
+#define glUniform1iv hd_glUniform1iv
+#define glGenerateMipmap hd_glGenerateMipmap
 
 namespace hd {
 using GLGetProc = void* (*)(const char*);

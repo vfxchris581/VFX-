@@ -32,6 +32,7 @@ void App::drawViewport() {
     // toolbar
     ImGui::SetCursorPos(ImVec2(6, ImGui::GetCursorPosY() + 4)); // below the tab bar
     toggleButton("Shaded", &viewOpts.shaded, "Smooth shaded surfaces");
+    ImGui::SameLine(); toggleButton("Mat", &viewOpts.materials, "Material preview: roughness, metal, emission, glass and texture maps.\nOff: plain clay shading");
     ImGui::SameLine(); toggleButton("Wire", &viewOpts.wireframe, "Wireframe over shaded (W)");
     ImGui::SameLine(); toggleButton("Points", &viewOpts.points, "Display points");
     ImGui::SameLine(); toggleButton("#Pt", &showPointNumbers, "Point numbers");
@@ -177,6 +178,13 @@ void App::drawViewport() {
         else
             std::snprintf(buf, sizeof buf, "%zu points  %zu primitives  %zu tris%s", g.numPoints(), g.numPrims(), renderer.stats().triangles, g.volumes.empty() ? "" : "  + volume");
         dl->AddText(ImVec2(tp.x, tp.y + ImGui::GetTextLineHeight()), IM_COL32(190, 190, 195, 220), buf);
+        if (viewOpts.materials && viewOpts.textures) {
+            float ty = tp.y + 2 * ImGui::GetTextLineHeight();
+            for (const std::string& e : renderer.textureErrors()) {
+                dl->AddText(ImVec2(tp.x, ty), IM_COL32(255, 190, 90, 235), e.c_str());
+                ty += ImGui::GetTextLineHeight();
+            }
+        }
         if (!d->error().empty()) {
             std::snprintf(buf, sizeof buf, "Error in %s: %s", d->name().c_str(), d->error().c_str());
             ImVec2 ts = ImGui::CalcTextSize(buf);

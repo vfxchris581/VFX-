@@ -406,6 +406,14 @@ void App::drawDisplayOptions() {
         }
         if (ImGui::BeginTabItem("Geometry")) {
             ch |= ImGui::Checkbox("Smooth Shaded", &o.shaded);
+            ImGui::BeginDisabled(!o.shaded);
+            ch |= ImGui::Checkbox("Material Preview", &o.materials);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show roughness, metal, emission, glass and SSS from Material nodes.\nOff: plain clay shading.");
+            ImGui::BeginDisabled(!o.materials);
+            ch |= ImGui::Checkbox("Texture Maps", &o.textures);
+            ImGui::EndDisabled();
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("The preview approximates the path tracer: glass is not refracted,\nand lights in the scene are not used (a fixed studio rig is).");
             ch |= ImGui::Checkbox("Wireframe Over Shaded", &o.wireframe);
             ch |= ImGui::Checkbox("Tint Backfaces", &o.backfaceTint);
             ImGui::EndTabItem();

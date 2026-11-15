@@ -91,6 +91,7 @@ int main(int argc, char** argv) {
 
     hd::App app;
     if (!app.init(win, "")) { std::printf("app init failed\n"); return 1; }
+    if (std::getenv("HD_SMOKE_CLAY")) app.viewOpts.materials = false; // compare against clay shading
     int failures = 0, glErrors = 0;
     auto runFrame = [&]() {
         io.DeltaTime = 1.f / 60.f;
@@ -131,6 +132,7 @@ int main(int argc, char** argv) {
         const hd::Geometry* g = d ? &d->geometry() : nullptr;
         std::printf("%s %-18s %8.0f ms  %zu nodes  display %s: %zu pts %zu prims %zu images\n", nodeErrors ? "FAIL" : "ok  ", path.stem().string().c_str(), ms,
                     app.graph.nodes().size(), d ? d->name().c_str() : "-", g ? g->numPoints() : 0, g ? g->numPrims() : 0, g ? g->images.size() : 0);
+        for (const std::string& e : app.renderer.textureErrors()) { std::printf("  %s: %s\n", path.filename().string().c_str(), e.c_str()); ++nodeErrors; }
         if (nodeErrors) ++failures;
         save("example_" + path.stem().string());
     }

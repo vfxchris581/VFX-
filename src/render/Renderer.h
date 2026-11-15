@@ -3,6 +3,7 @@
 #pragma once
 #include "core/Geometry.h"
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,8 @@ struct ViewOptions {
     bool normals = false;
     bool grid = true;
     bool backfaceTint = false;
+    bool materials = true;    // material preview (roughness, metal, emission, glass); off = clay shading
+    bool textures = true;     // base colour, roughness, metallic and normal maps (material preview only)
     float pointSize = 5.f;
     float normalScale = 0.15f;
     Vec3 defaultColor{0.72f, 0.74f, 0.78f};
@@ -75,12 +78,40 @@ public:
     // Read back the last rendered image as RGBA8, bottom-up rows.
     void readPixels(std::vector<uint8_t>& rgba, int& w, int& h);
     const RenderStats& stats() const { return stats_; }
+    // Texture maps that could not be loaded for the current geometry (one message per file).
+    const std::vector<std::string>& textureErrors() const { return textureErrors_; }
 
 private:
     struct Batch {
         unsigned vao = 0, vbo = 0;
         int count = 0;
     };
+    // Triangles sharing one set of texture maps (ids from registerTexturePath; 0 = none).
+    struct MatGroup {
+        Batch batch;
+        int maps[4] = {0, 0, 0, 0}; // base, rough, metal, normal
+        bool transmissive = false;
+    };
+    // A texture map on the GPU: a 2D array with one layer per UDIM tile (one layer when not UDIM).
+    struct GpuTexture {
+        unsigned tex = 0;
+        bool udim = false;
+        std::vector<int> tileLayer; // 100 entries (tile 1001 + i -> layer, -1 = missing)
+        bool ok = false;
+    };
+    const GpuTexture* gpuTexture(int id, bool color);
+    void drawMaterials(const Mat4& V, const Mat4& P, const ViewOptions& opt);
+    std::vector<MatGroup> groups_;
+    bool fullVertex_ = false; // groups carry uv + material channels
+    std::map<std::string, GpuTexture> texCache_;
+    std::vector<std::string> textureErrors_;
+    // One message per file: later reports of the same file (without the reason) are dropped.
+    void noteTextureError(const std::string& msg) {
+        const std::string head = msg.substr(0, msg.find(" ("));
+        for (const auto& e : textureErrors_) if (e.compare(0, head.size(), head) == 0) return;
+        textureErrors_.push_back(msg);
+    }
+    unsigned progMat_ = 0;
     void upload(Batch& b, const std::vector<float>& data, int floatsPerVertex, const int* layout, int nAttribs);
     void ensureTargets(int w, int h);
     void drawBatch(const Batch& b, unsigned mode);
