@@ -10,13 +10,14 @@
 #include <cstring>
 #include <functional>
 #include <chrono>
+#include "core/Version.h"
 #include <string>
 
 using namespace hd;
 
 static void usage() {
     std::printf(
-        "hdc - HD headless tool\n\n"
+        "hdc %s - HD headless tool\n\n"
         "  hdc info   <scene.hdg> [--frame N]            list nodes and cook stats\n"
         "  hdc cook   <scene.hdg> <out.obj|out.ply> [--node NAME] [--frame N]\n"
         "  hdc frames <scene.hdg> <out_$F.obj> <start> <end> [--node NAME]   export a sequence\n"
@@ -30,7 +31,8 @@ static void usage() {
         "  hdc demo   <name> <out.hdg>                   write a demo scene\n"
         "  hdc bench  [--quick] [--examples DIR]          time standard simulation and render workloads\n"
         "  hdc demos                                     list demo scenes\n"
-        "  hdc nodes                                     list node types\n");
+        "  hdc nodes                                     list node types\n"
+        "  hdc --version                                 print version, commit and platform\n", versionString());
 }
 
 static const char* opt(int argc, char** argv, const char* name) {
@@ -147,6 +149,11 @@ static int runBench(const std::string& examplesDir, bool quick) {
 int main(int argc, char** argv) {
     if (argc < 2) { usage(); return 1; }
     std::string cmd = argv[1];
+    if (cmd == "--version" || cmd == "-v" || cmd == "version") {
+        std::printf("HD %s (%s, %s, built %s)\n", versionString(), gitRevision(), platformName(), buildDate());
+        return 0;
+    }
+    if (cmd == "--help" || cmd == "-h" || cmd == "help") { usage(); return 0; }
     if (cmd == "nodes") {
         for (auto& t : nodeTypes())
             std::printf("%-15s %-18s %-11s %s\n", t.name.c_str(), t.label.c_str(), t.category.c_str(), t.description.c_str());

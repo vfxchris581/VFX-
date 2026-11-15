@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleExecutable</key><string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+  <key>CFBundleIconFile</key><string>${MACOSX_BUNDLE_ICON_FILE}</string>
+  <key>CFBundleIdentifier</key><string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+  <key>CFBundleVersion</key><string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+  <key>CFBundleSignature</key><string>????</string>
+  <key>NSHumanReadableCopyright</key><string>${MACOSX_BUNDLE_COPYRIGHT}</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>HD Scene</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>CFBundleTypeIconFile</key><string>${MACOSX_BUNDLE_ICON_FILE}</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>com.vfxchris581.hd.scene</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Geometry</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>CFBundleTypeExtensions</key><array><string>obj</string><string>ply</string><string>usda</string><string>bvh</string></array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>com.vfxchris581.hd.scene</string>
+      <key>UTTypeDescription</key><string>HD Scene</string>
+      <key>UTTypeConformsTo</key><array><string>public.json</string><string>public.data</string></array>
+      <key>UTTypeIconFile</key><string>${MACOSX_BUNDLE_ICON_FILE}</string>
+      <key>UTTypeTagSpecification</key>
+      <dict><key>public.filename-extension</key><array><string>hdg</string></array></dict>
+    </dict>
+  </array>
+</dict>
+</plist>

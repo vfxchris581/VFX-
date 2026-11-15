@@ -50,6 +50,17 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Read version
+        shell: bash
+        run: |
+          v=$(sed -n 's/^project(HD VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          echo "HD_VERSION=$v" >> "$GITHUB_ENV"
+          echo "Version $v"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF#refs/tags/v}" != "$v" ]]; then
+            echo "::error::Tag ${GITHUB_REF#refs/tags/} does not match CMakeLists.txt version $v"; exit 1
+          fi
+
+      # ---------------------------------------------------------------- macOS
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -58,9 +69,36 @@ jobs:
           cp build/hdc dist/HD/
           cp -R examples dist/HD/examples
           cp README.md dist/HD/
+          cp packaging/macos/READ-ME-FIRST.txt "dist/HD/Read Me First.txt"
+          # Ad-hoc signature: not a Developer ID (Gatekeeper still asks), but gives every
+          # binary a valid, consistent signature, which Apple Silicon requires.
+          codesign --force --deep --sign - dist/HD/HD.app
+          codesign --force --sign - dist/HD/hdc
           ln -s /Applications dist/HD/Applications
-          hdiutil create -volname "HD" -srcfolder dist/HD -ov -format UDZO dist/${{ matrix.artifact }}.dmg
+          hdiutil create -volname "HD ${HD_VERSION}" -srcfolder dist/HD -ov -format UDZO dist/${{ matrix.artifact }}.dmg
 
+      - name: Verify the disk image (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          hdiutil attach dist/${{ matrix.artifact }}.dmg -mountpoint /tmp/hdmnt -nobrowse -readonly
+          APP=/tmp/hdmnt/HD.app
+          plutil -lint "$APP/Contents/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$HD_VERSION"
+          /usr/libexec/PlistBuddy -c 'Print UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0' "$APP/Contents/Info.plist" | grep -qx hdg
+          test -f "$APP/Contents/Resources/hd.icns"
+          test -f "$APP/Contents/MacOS/examples/terrain.hdg"
+          lipo -archs "$APP/Contents/MacOS/HD" | grep -q arm64
+          lipo -archs "$APP/Contents/MacOS/HD" | grep -q x86_64
+          codesign --verify --deep --strict "$APP"
+          "$APP/Contents/MacOS/HD" --version | grep "HD $HD_VERSION"
+          /tmp/hdmnt/hdc --version | grep "HD $HD_VERSION"
+          /tmp/hdmnt/hdc info /tmp/hdmnt/examples/terrain.hdg | tail -1
+          test -L /tmp/hdmnt/Applications
+          hdiutil detach /tmp/hdmnt
+          echo "Disk image OK"
+
+      # ---------------------------------------------------------------- Windows
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -80,34 +118,74 @@ jobs:
           if (-not (Test-Path $makensis)) {
             choco install nsis -y --no-progress
           }
-          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(HD VERSION ([0-9.]+)').Matches[0].Groups[1].Value
           $root = (Get-Location).Path
-          & $makensis /V2 "/DVERSION=$version" "/DSRCDIR=$root\dist\HD" "/DOUTFILE=$root\dist\HD-Windows-Setup.exe" packaging\windows\installer.nsi
+          & $makensis /V2 "/DVERSION=$env:HD_VERSION" "/DSRCDIR=$root\dist\HD" "/DOUTFILE=$root\dist\HD-Windows-Setup.exe" "/DICON=$root\packaging\icons\hd.ico" packaging\windows\installer.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify the installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = 'C:\HDInstallTest'
+          $p = Start-Process -Wait -PassThru -FilePath dist\HD-Windows-Setup.exe -ArgumentList '/S', "/D=$dir"
+          if ($p.ExitCode -ne 0) { throw "installer exit code $($p.ExitCode)" }
+          foreach ($f in 'HD.exe', 'hdc.exe', 'Uninstall.exe', 'README.md', 'examples\terrain.hdg') {
+            if (-not (Test-Path "$dir\$f")) { throw "missing $f" }
+          }
+          $key = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\HD'
+          $reg = Get-ItemProperty $key
+          if ($reg.DisplayVersion -ne $env:HD_VERSION) { throw "registry version $($reg.DisplayVersion)" }
+          if (-not (Test-Path 'Registry::HKEY_CLASSES_ROOT\.hdg')) { throw '.hdg association missing' }
+          $vi = (Get-Item "$dir\HD.exe").VersionInfo
+          if ($vi.ProductVersion -ne $env:HD_VERSION) { throw "HD.exe version resource '$($vi.ProductVersion)'" }
+          $out = & "$dir\hdc.exe" --version
+          Write-Host $out
+          if ($out -notmatch "HD $([regex]::Escape($env:HD_VERSION))") { throw 'hdc --version mismatch' }
+          & "$dir\hdc.exe" info "$dir\examples\terrain.hdg" | Select-Object -Last 1
+          if ($LASTEXITCODE -ne 0) { throw 'hdc info failed' }
+          # Uninstall in place (_?= makes the uninstaller run synchronously)
+          $u = Start-Process -Wait -PassThru -FilePath "$dir\Uninstall.exe" -ArgumentList '/S', "_?=$dir"
+          if ($u.ExitCode -ne 0) { throw "uninstaller exit code $($u.ExitCode)" }
+          if (Test-Path "$dir\HD.exe") { throw 'HD.exe still present after uninstall' }
+          if (Test-Path "$dir\examples") { throw 'examples still present after uninstall' }
+          if (Test-Path $key) { throw 'uninstall registry key still present' }
+          if (Test-Path 'Registry::HKEY_CLASSES_ROOT\.hdg') { throw '.hdg association still present' }
+          Write-Host 'Installer OK: install, registry, version resource, hdc, uninstall'
+
+      # ---------------------------------------------------------------- Linux
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist/HD
           cp build/HD build/hdc dist/HD/
           cp -R examples dist/HD/examples
-          cp README.md dist/HD/
+          cp README.md packaging/linux/hd.desktop packaging/linux/hd-mime.xml packaging/linux/install.sh dist/HD/
+          cp packaging/icons/hd_256.png dist/HD/hd.png
           tar -C dist -czf dist/${{ matrix.artifact }}.tar.gz HD
+
+      - name: Verify the tarball (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          sudo apt-get install -y desktop-file-utils shared-mime-info >/dev/null
+          t=$(mktemp -d)
+          tar -C "$t" -xzf dist/${{ matrix.artifact }}.tar.gz
+          "$t/HD/install.sh" "$t/prefix"
+          desktop-file-validate "$t/prefix/share/applications/hd.desktop"
+          "$t/prefix/bin/HD" --version | grep "HD $HD_VERSION"
+          "$t/prefix/bin/hdc" --version | grep "HD $HD_VERSION"
+          "$t/prefix/bin/hdc" info "$t/prefix/lib/hd/examples/terrain.hdg" | tail -1
+          grep -q "application/x-hd-scene" "$t/prefix/share/mime/globs2"
+          "$t/prefix/lib/hd/uninstall.sh"
+          test ! -e "$t/prefix/bin/hdc"
+          test ! -e "$t/prefix/lib/hd"
+          echo "Tarball OK"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.exe
-            dist/*.tar.gz
-
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
             dist/*.dmg
             dist/*.zip
             dist/*.exe
@@ -167,3 +245,44 @@ jobs:
         with:
           name: HD-UI-screenshots
           path: smoke-shots/*.png
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, sanitizers, app-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: HD-*
+          merge-multiple: true
+      - name: Checksums and release notes
+        run: |
+          rm -f artifacts/*screenshot* || true
+          ls -la artifacts
+          (cd artifacts && sha256sum HD-* > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          v=${GITHUB_REF#refs/tags/v}
+          awk -v v="$v" '$0 ~ "^## "v"( |$)" {on=1; next} on && /^## / {exit} on {print}' CHANGELOG.md > notes.md
+          test -s notes.md || echo "HD $v" > notes.md
+          cat >> notes.md <<'EOF'
+
+          ### Install
+          - **macOS 11+ (Apple Silicon and Intel):** open `HD-macOS.dmg` and drag HD to Applications. The app is not notarized, so the first time right-click HD.app and choose **Open** (see *Read Me First* in the disk image).
+          - **Windows 10/11 (64-bit):** run `HD-Windows-Setup.exe`. It is not code-signed, so SmartScreen may ask: choose **More info, Run anyway**. `HD-Windows.zip` is a portable copy.
+          - **Linux (x86_64, glibc 2.39+, e.g. Ubuntu 24.04):** extract `HD-Linux.tar.gz` and run `HD/install.sh` (installs to `~/.local`).
+
+          Verify downloads with `SHA256SUMS.txt`.
+          EOF
+          cat notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: HD ${{ github.ref_name }}
+          body_path: notes.md
+          files: |
+            artifacts/HD-macOS.dmg
+            artifacts/HD-Windows-Setup.exe
+            artifacts/HD-Windows.zip
+            artifacts/HD-Linux.tar.gz
+            artifacts/SHA256SUMS.txt

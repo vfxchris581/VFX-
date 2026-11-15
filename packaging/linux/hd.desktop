@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=HD
+GenericName=3D and VFX
+Comment=Procedural 3D and visual effects
+Exec=HD %f
+Icon=hd
+Terminal=false
+Categories=Graphics;3DGraphics;
+MimeType=application/x-hd-scene;
+Keywords=3D;VFX;simulation;render;procedural;

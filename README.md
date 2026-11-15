@@ -91,19 +91,23 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 
 ## Download
 
-Every push to `main` builds the app on GitHub Actions. To get it, open **Actions → Build → latest run → Artifacts**:
+Releases are on the **[Releases page](https://github.com/vfxchris581/VFX-/releases)**:
 
-| Platform | Artifact |
+| Platform | File |
 |---|---|
-| macOS (Apple Silicon + Intel) | `HD-macOS.dmg` |
+| macOS 11+ (Apple Silicon + Intel) | `HD-macOS.dmg` |
 | Windows 10/11 (64-bit) | `HD-Windows-Setup.exe` (installer) or `HD-Windows.zip` (portable) |
-| Linux | `HD-Linux.tar.gz` |
+| Linux x86_64 (glibc 2.39+, e.g. Ubuntu 24.04) | `HD-Linux.tar.gz` |
 
-Pushing a tag like `v0.1.0` also publishes these files as a GitHub Release.
+`SHA256SUMS.txt` lists checksums. Every push to `main` also builds these files: open **Actions → Build → latest run → Artifacts**. See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
-> **macOS:** drag `HD.app` onto the Applications shortcut in the disk image. The app isn't code-signed, so the first time you open it, right-click `HD.app` and choose **Open**.
+> **macOS:** drag `HD.app` onto the Applications shortcut in the disk image. The app isn't notarized, so the first time, right-click `HD.app` and choose **Open** (on macOS 15+: **System Settings → Privacy & Security → Open Anyway**). After that, double-clicking a `.hdg` file opens it in HD.
 >
-> **Windows:** the installer isn't code-signed. If SmartScreen appears, choose **More info → Run anyway**.
+> **Windows:** the installer isn't code-signed. If SmartScreen appears, choose **More info → Run anyway**. For scripted installs: `HD-Windows-Setup.exe /S /D=C:\Tools\HD`.
+>
+> **Linux:** `tar xzf HD-Linux.tar.gz && HD/install.sh` installs to `~/.local` with a menu entry and `.hdg` file type (`HD/install.sh /usr/local` for all users). It prints the uninstall command.
+
+To publish a release: bump `project(HD VERSION ...)` in `CMakeLists.txt`, add a section to `CHANGELOG.md`, then push a matching tag (`git tag v0.7.0 && git push origin v0.7.0`).
 
 ## Build from source
 
@@ -183,6 +187,7 @@ hdc image examples/comp.hdg comp.$F4.png --frames 1 24        # write a comp seq
 hdc usd examples/rig.hdg rig.usda --frames 1 48               # animated USD export
 hdc demo terrain my_scene.hdg               # write a demo scene
 hdc bench [--quick]                         # time every major subsystem
+hdc --version                               # version, commit and platform
 ```
 
 ## Architecture
@@ -212,5 +217,6 @@ A node recooks only when its parameters, inputs or bypass state change, or when 
 7. ~~FLIP fluids, ocean and Vellum~~ — done. Next: whitewater (foam/spray/bubbles), surface tension, sparse/narrow-band FLIP, Vellum triangle self-collision, grains and tetrahedral soft bodies.
 8. ~~USD, rigging and animation, compositing~~ — done. Next: USD references/variants and a LOP network, crowds, camera tracking, a dedicated image viewer with channels.
 9. ~~Optimization and stability (Phase 7)~~ — done: benchmarks, sanitizer CI, fuzzing, headless app smoke test, FLIP 2.1x and Vellum 1.5x faster. Next: pyro optimization, viewport texture preview, soak tests.
+10. ~~Installers and releases (Phase 8)~~ — done: icons, file associations, version info, install-tested packages in CI, tagged GitHub Releases. Next: code signing/notarization (needs the owner's certificates), AppImage, auto-update.
 4. ~~Path-traced render view~~ and ~~materials, textures, HDRI, DOF, motion blur, EXR, denoising~~ — done. Next for rendering: node-based shader networks, displacement, Cryptomatte, render layers, GPU rendering.
 5. ~~Subnetworks and assets~~ — done. Next: parameters promoted to the outside of a subnet, linked (locked) assets, Python scripting.

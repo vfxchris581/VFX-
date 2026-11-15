@@ -1,0 +1,23 @@
+HD - procedural 3D and VFX
+==========================
+
+Install: drag HD.app onto the Applications folder in this window.
+
+First launch: HD is not notarized by Apple (that needs a paid Apple Developer ID).
+macOS will therefore say it cannot check the app for malicious software.
+To open it the first time:
+
+  1. Open Applications, right-click (or Control-click) HD.app and choose Open.
+  2. Click Open in the dialog.
+
+On macOS 15 and later, if there is no Open button: try to open HD once, then go to
+System Settings > Privacy & Security, scroll down and click "Open Anyway".
+
+After that HD opens normally, and double-clicking .hdg scene files opens them in HD.
+
+Command line: the disk image also contains "hdc", the headless tool for cooking,
+rendering and exporting scenes. Copy it somewhere on your PATH, for example:
+
+  sudo cp /Volumes/HD*/hdc /usr/local/bin/
+
+Example scenes are in the "examples" folder and under File > Examples in the app.

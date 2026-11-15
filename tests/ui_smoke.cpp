@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
     io.DisplaySize = ImVec2(float(W), float(H));
     ImFontConfig cfg; cfg.OversampleH = 2;
     if (std::filesystem::exists("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
-        io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14.f, &cfg);
+        { static const ImWchar r[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x2193, 0x2212, 0x2212, 0}; io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14.f, &cfg, r); }
     else io.Fonts->AddFontDefault();
     hd::applyHoudiniTheme(1.f);
     if (!ImGui_ImplOpenGL3_Init("#version 330 core")) { std::printf("imgui gl3 init failed\n"); return 1; }
@@ -152,6 +152,10 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 3; ++i) runFrame();
     save("render_settings");
     app.showRenderSettings = false;
+    app.showAbout = true;
+    for (int i = 0; i < 3; ++i) runFrame();
+    save("about");
+    app.showAbout = false;
     app.graph.render.samples = renderSamples;
     app.graph.render.width = 480; app.graph.render.height = 270;
     app.startRender();

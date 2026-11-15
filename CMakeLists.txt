@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(HD VERSION 0.6.0 LANGUAGES C CXX)
+project(HD VERSION 0.7.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,11 +36,26 @@ add_library(hd_core STATIC
   src/core/Rigging.cpp
   src/core/Shading.cpp
   src/core/Usd.cpp
+  src/core/Version.cpp
   src/core/Sim.cpp
   src/core/Vellum.cpp
   src/core/Volume.cpp
 )
 target_include_directories(hd_core PUBLIC src)
+
+# Version identification, compiled into Version.cpp only so a new commit doesn't rebuild everything.
+set(HD_GIT_REVISION "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+  execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE HD_GIT_REVISION_OUT
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE HD_GIT_RESULT)
+  if(HD_GIT_RESULT EQUAL 0 AND HD_GIT_REVISION_OUT)
+    set(HD_GIT_REVISION "${HD_GIT_REVISION_OUT}")
+  endif()
+endif()
+set_source_files_properties(src/core/Version.cpp PROPERTIES COMPILE_DEFINITIONS
+  "HD_VERSION_STRING=\"${PROJECT_VERSION}\";HD_GIT_REVISION=\"${HD_GIT_REVISION}\"")
 find_package(Threads REQUIRED)
 target_link_libraries(hd_core PUBLIC Threads::Threads)
 if(MSVC)
@@ -51,7 +66,15 @@ else()
 endif()
 
 # headless command-line tool (cook / export / demos)
-add_executable(hdc src/tools/hdc.cpp)
+# Windows: icon + version resource for both executables
+if(WIN32)
+  set(HD_ICON_PATH "${CMAKE_SOURCE_DIR}/packaging/icons/hd.ico")
+  file(TO_CMAKE_PATH "${HD_ICON_PATH}" HD_ICON_PATH)
+  configure_file(packaging/windows/hd.rc.in ${CMAKE_BINARY_DIR}/hd.rc @ONLY)
+  set(HD_WIN_RESOURCES ${CMAKE_BINARY_DIR}/hd.rc)
+endif()
+
+add_executable(hdc src/tools/hdc.cpp ${HD_WIN_RESOURCES})
 target_link_libraries(hdc PRIVATE hd_core)
 
 if(HD_BUILD_TESTS)
@@ -128,17 +151,28 @@ if(HD_BUILD_APP)
     src/app/Shelf.cpp
     src/app/Theme.cpp
   )
+  if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(hd_app PRIVATE src/app/MacOpenFiles.mm)
+  endif()
   target_link_libraries(hd_app PUBLIC hd_render imgui glfw)
 
   set(HD_APP_SOURCES src/app/main.cpp)
   if(APPLE)
-    add_executable(HD MACOSX_BUNDLE ${HD_APP_SOURCES})
+    set(HD_ICNS ${CMAKE_SOURCE_DIR}/packaging/icons/hd.icns)
+    set_source_files_properties(${HD_ICNS} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    add_executable(HD MACOSX_BUNDLE ${HD_APP_SOURCES} ${HD_ICNS})
     set_target_properties(HD PROPERTIES
+      MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in
       MACOSX_BUNDLE_BUNDLE_NAME "HD"
+      MACOSX_BUNDLE_EXECUTABLE_NAME "HD"
+      MACOSX_BUNDLE_ICON_FILE "hd.icns"
       MACOSX_BUNDLE_GUI_IDENTIFIER "com.vfxchris581.hd"
-      MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+      MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+      MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+      MACOSX_BUNDLE_COPYRIGHT "vfxchris581")
   elseif(WIN32)
-    add_executable(HD WIN32 ${HD_APP_SOURCES})
+    add_executable(HD WIN32 ${HD_APP_SOURCES} ${HD_WIN_RESOURCES})
   else()
     add_executable(HD ${HD_APP_SOURCES})
   endif()

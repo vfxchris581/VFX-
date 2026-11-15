@@ -129,10 +129,14 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Pyro smoke, 60 frames | 4,453 ms | 4,448 ms | unchanged (not optimized yet) |
 | All workloads | 33,553 ms | 22,109 ms | 34% less time |
 
-## Phase 8: installers
+## Phase 8: installers and releases
 
-| Platform | Status |
+| Item | Status |
 |---|---|
-| macOS | Working: universal (Apple Silicon + Intel) `HD-macOS.dmg` with an Applications shortcut. Not code-signed or notarized |
-| Windows 10/11 | Working: `HD-Windows-Setup.exe` (NSIS, 64-bit) with Start menu and desktop shortcuts, `.hdg` file association and an uninstaller, plus a portable zip. Not code-signed, so SmartScreen will warn |
-| Linux | Working: tarball |
+| macOS | Working: universal (Apple Silicon + Intel) `HD-macOS.dmg`, macOS 11+. App icon, `.hdg` document type (Finder double-click / Open With / Dock drop open the scene), OBJ/PLY/USDA/BVH as alternate types, ad-hoc signature, "Read Me First" with Gatekeeper steps. CI mounts the image and checks Info.plist, icon, both architectures, signature and that HD and `hdc` run. The Finder open-file path is compiled in CI but has not been tried on a real Mac yet |
+| Windows 10/11 | Working: `HD-Windows-Setup.exe` (NSIS, 64-bit) with HD icon, Start menu, desktop and Example Scenes shortcuts, `.hdg` association, Apps & Features entry with size, silent mode (`/S /D=path`) and an uninstaller, plus a portable zip. `HD.exe`/`hdc.exe` carry icon and version resources. CI installs silently, checks files, registry, association and version, runs `hdc`, uninstalls and checks everything is removed |
+| Linux | Working: `HD-Linux.tar.gz` with `install.sh` (to `~/.local` or any prefix): desktop entry, icon, `.hdg` MIME type, uninstaller. CI installs, validates the desktop file, runs HD/`hdc` and uninstalls. Built on Ubuntu 24.04, so needs glibc 2.39 or newer |
+| Version info | Working: Help > About, `HD --version`, `hdc --version` (version, commit, platform, build date) |
+| GitHub Releases | Working: pushing a tag `vX.Y.Z` (must match the CMake version) runs every job and, if all pass, publishes one release with the four packages, `SHA256SUMS.txt` and notes from CHANGELOG.md |
+| Code signing / notarization | Not done: needs the owner's Apple Developer ID certificate and a Windows code-signing certificate (paid, issued to a person or company). Until then macOS asks once on first launch and Windows SmartScreen may warn |
+| Auto-update, AppImage/Flatpak, Linux ARM, Windows ARM | Planned |

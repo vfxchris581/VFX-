@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Generate HD's application icons (original artwork, drawn procedurally).
+
+Writes into packaging/icons/:
+  hd.png (1024), hd_256.png, hd.icns (macOS), hd.ico (Windows)
+and src/app/IconData.h (64x64 and 32x32 RGBA for the GLFW window icon on Linux).
+
+Needs Pillow. Run from the repository root:  python3 tools/make_icons.py
+The outputs are committed, so building HD never needs Python.
+"""
+import math
+import os
+import random
+import sys
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "packaging", "icons")
+S = 1024
+
+
+def lerp(a, b, t):
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(len(a)))
+
+
+def master():
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    # Rounded-square body with a vertical gradient (macOS-style 824px tile inside 1024).
+    m = 100
+    body = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    grad = Image.new("RGBA", (S, S))
+    gd = ImageDraw.Draw(grad)
+    for y in range(S):
+        gd.line([(0, y), (S, y)], fill=lerp((38, 42, 52, 255), (14, 15, 19, 255), y / S))
+    mask = Image.new("L", (S, S), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([m, m, S - m, S - m], radius=185, fill=255)
+    body.paste(grad, (0, 0), mask)
+
+    # Shadow under the tile.
+    shadow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle([m, m + 18, S - m, S - m + 18], radius=185, fill=(0, 0, 0, 150))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(22))
+    img = Image.alpha_composite(img, shadow)
+    img = Image.alpha_composite(img, body)
+
+    # A glowing orange vortex: a spiral of sparks, like a particle sim seen from above.
+    glow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    gdr = ImageDraw.Draw(glow)
+    rnd = random.Random(581)
+    cx, cy = S * 0.5, S * 0.46
+    for i in range(2600):
+        t = rnd.random()
+        arm = rnd.randrange(3)
+        ang = t * 4.2 * math.pi + arm * 2 * math.pi / 3 + rnd.gauss(0, 0.12)
+        r = 40 + t * 290 + rnd.gauss(0, 10)
+        x, y = cx + math.cos(ang) * r, cy + math.sin(ang) * r * 0.62
+        heat = 1 - t
+        col = lerp((255, 90, 20), (255, 230, 150), heat * heat)
+        a = int(80 + 175 * heat)
+        rad = 2 + 7 * heat * rnd.random()
+        gdr.ellipse([x - rad, y - rad, x + rad, y + rad], fill=col + (a,))
+    for k in range(12, 0, -1):  # hot core
+        rr = 6 * k
+        gdr.ellipse([cx - rr, cy - rr * 0.62, cx + rr, cy + rr * 0.62], fill=lerp((255, 140, 40), (255, 250, 225), 1 - k / 12) + (int(40 + 215 * (1 - k / 12)),))
+    blurred = glow.filter(ImageFilter.GaussianBlur(14))
+    img = Image.alpha_composite(img, blurred)
+    img = Image.alpha_composite(img, glow)
+
+    # "HD" lettering.
+    font = None
+    for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/Library/Fonts/Arial Bold.ttf"):
+        if os.path.exists(f):
+            font = ImageFont.truetype(f, 250)
+            break
+    if font is None:
+        font = ImageFont.load_default()
+    txt = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    td = ImageDraw.Draw(txt)
+    bbox = td.textbbox((0, 0), "HD", font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    tx, ty = (S - tw) / 2 - bbox[0], S * 0.66 - bbox[1]
+    td.text((tx + 6, ty + 8), "HD", font=font, fill=(0, 0, 0, 160))
+    txt = txt.filter(ImageFilter.GaussianBlur(6))
+    td = ImageDraw.Draw(txt)
+    td.text((tx, ty), "HD", font=font, fill=(240, 242, 248, 255))
+    img = Image.alpha_composite(img, txt)
+
+    # Clip everything to the tile (plus its shadow).
+    alpha = img.split()[3]
+    clip = Image.new("L", (S, S), 0)
+    ImageDraw.Draw(clip).rounded_rectangle([m, m, S - m, S - m], radius=185, fill=255)
+    outside = Image.composite(Image.new("L", (S, S), 0), alpha, clip)
+    shadow_alpha = shadow.split()[3]
+    alpha = Image.composite(alpha, Image.composite(shadow_alpha, outside, clip.point(lambda v: 255 - v)), clip)
+    img.putalpha(alpha)
+    return img
+
+
+def c_array(img, name):
+    data = img.tobytes()
+    lines = []
+    for i in range(0, len(data), 24):
+        lines.append("    " + ",".join(str(b) for b in data[i:i + 24]) + ",")
+    return f"static const unsigned char {name}[{len(data)}] = {{\n" + "\n".join(lines) + "\n};\n"
+
+
+def main():
+    os.makedirs(OUT, exist_ok=True)
+    big = master()
+    big.save(os.path.join(OUT, "hd.png"), optimize=True)
+    big.resize((256, 256), Image.LANCZOS).save(os.path.join(OUT, "hd_256.png"), optimize=True)
+    big.save(os.path.join(OUT, "hd.icns"), sizes=[(16, 16), (32, 32), (64, 64), (128, 128), (256, 256), (512, 512), (1024, 1024)])
+    big.save(os.path.join(OUT, "hd.ico"), sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+
+    i64 = big.resize((64, 64), Image.LANCZOS).convert("RGBA")
+    i32 = big.resize((32, 32), Image.LANCZOS).convert("RGBA")
+    hdr = os.path.join(ROOT, "src", "app", "IconData.h")
+    with open(hdr, "w") as f:
+        f.write("// Generated by tools/make_icons.py - do not edit. RGBA window icons for GLFW.\n#pragma once\n\n")
+        f.write(c_array(i64, "kHdIcon64"))
+        f.write(c_array(i32, "kHdIcon32"))
+    print("icons written to", OUT, "and", hdr)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

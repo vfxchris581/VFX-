@@ -1,11 +1,13 @@
 ; Windows installer for HD (64-bit). Built by CI:
-;   makensis /DVERSION=0.2.0 /DSRCDIR=dist\HD /DOUTFILE=dist\HD-Windows-Setup.exe packaging\windows\installer.nsi
+;   makensis /DVERSION=0.7.0 /DSRCDIR=dist\HD /DOUTFILE=dist\HD-Windows-Setup.exe /DICON=packaging\icons\hd.ico packaging\windows\installer.nsi
+; Silent install for scripted setups:  HD-Windows-Setup.exe /S /D=C:\Path\To\HD
 ; Use absolute paths: makensis resolves relative paths from this script's folder.
 ; SRCDIR must contain HD.exe, hdc.exe, README.md and the examples folder.
 
 Unicode true
 !include "MUI2.nsh"
 !include "x64.nsh"
+!include "FileFunc.nsh"
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -35,6 +37,10 @@ VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" "${COMPANY}"
 
+!ifdef ICON
+  !define MUI_ICON "${ICON}"
+  !define MUI_UNICON "${ICON}"
+!endif
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -78,6 +84,12 @@ Section "${APPNAME} (required)" SecMain
   CreateDirectory "$SMPROGRAMS\${APPNAME}"
   CreateShortcut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\HD.exe"
   CreateShortcut "$SMPROGRAMS\${APPNAME}\Uninstall ${APPNAME}.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortcut "$SMPROGRAMS\${APPNAME}\Example Scenes.lnk" "$INSTDIR\examples"
+
+  ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+  IntFmt $0 "0x%08X" $0
+  WriteRegDWORD HKLM "${UNINSTKEY}" "EstimatedSize" "$0"
+  WriteRegStr HKLM "${UNINSTKEY}" "URLInfoAbout" "https://github.com/vfxchris581/VFX-"
 SectionEnd
 
 Section "Desktop shortcut" SecDesktop
@@ -89,6 +101,7 @@ Section "Open .hdg scenes with ${APPNAME}" SecAssoc
   WriteRegStr HKCR "HD.Scene" "" "HD Scene"
   WriteRegStr HKCR "HD.Scene\DefaultIcon" "" "$INSTDIR\HD.exe,0"
   WriteRegStr HKCR "HD.Scene\shell\open\command" "" '"$INSTDIR\HD.exe" "%1"'
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)' ; refresh Explorer icons
 SectionEnd
 
 Section "Uninstall"
@@ -101,12 +114,14 @@ Section "Uninstall"
   RMDir "$INSTDIR"
   Delete "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk"
   Delete "$SMPROGRAMS\${APPNAME}\Uninstall ${APPNAME}.lnk"
+  Delete "$SMPROGRAMS\${APPNAME}\Example Scenes.lnk"
   RMDir "$SMPROGRAMS\${APPNAME}"
   Delete "$DESKTOP\${APPNAME}.lnk"
   ReadRegStr $0 HKCR "HD.Scene\shell\open\command" ""
   StrCmp $0 '"$INSTDIR\HD.exe" "%1"' 0 +3
     DeleteRegKey HKCR "HD.Scene"
     DeleteRegKey HKCR ".hdg"
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
   DeleteRegKey HKLM "${UNINSTKEY}"
   DeleteRegKey HKLM "Software\${COMPANY}\${APPNAME}"
 SectionEnd

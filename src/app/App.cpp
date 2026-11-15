@@ -2,6 +2,7 @@
 #include "core/Usd.h"
 #include "core/Demo.h"
 #include "core/GeoIO.h"
+#include "core/Version.h"
 #include "render/GL.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -758,7 +759,12 @@ void App::drawHelpWindows() {
     if (showAbout) {
         if (ImGui::Begin("About HD", &showAbout, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::TextUnformatted("HD — procedural 3D VFX environment");
-            ImGui::TextDisabled("Version 0.1  ·  node-based geometry (SOP-style) core");
+            ImGui::Text("Version %s  (commit %s)", versionString(), gitRevision());
+            ImGui::TextDisabled("%s  ·  built %s", platformName(), buildDate());
+            ImGui::Separator();
+            ImGui::TextWrapped("Node-based geometry, particles, pyro, rigid bodies, FLIP fluids, Vellum, "
+                               "a path tracer, rigging, compositing and USD export, written from scratch.");
+            ImGui::TextDisabled("Source: github.com/vfxchris581/VFX-");
             ImGui::Separator();
             ImGui::Text("%zu node types  ·  OpenGL %s", nodeTypes().size(), (const char*)glGetString(GL_VERSION));
             ImGui::TextDisabled("%s", (const char*)glGetString(GL_RENDERER));
