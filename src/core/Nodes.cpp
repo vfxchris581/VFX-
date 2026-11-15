@@ -1,6 +1,7 @@
 // Built-in SOP node types.
 #include "GeoIO.h"
 #include "Image.h"
+#include "Usd.h"
 #include "Node.h"
 #include "Noise.h"
 #include "Ops.h"
@@ -16,6 +17,8 @@ void registerDestructionNodes(std::vector<NodeType>& types); // Destruction.cpp
 void registerFluidNodes(std::vector<NodeType>& types);       // Fluids.cpp
 void registerVellumNodes(std::vector<NodeType>& types);      // Vellum.cpp
 void registerShadingNodes(std::vector<NodeType>& types);     // Shading.cpp
+void registerRiggingNodes(std::vector<NodeType>& types);     // Rigging.cpp
+void registerCompositingNodes(std::vector<NodeType>& types); // Compositing.cpp
 namespace {
 
 // ---- parameter builders
@@ -280,13 +283,16 @@ std::vector<NodeType> buildTypes() {
     }
     {
         NodeType t; t.name = "file"; t.label = "File"; t.category = "Generators";
-        t.description = "Reads geometry from a Wavefront .obj file.";
+        t.description = "Reads geometry from a Wavefront .obj or USD .usda file.";
         t.parms = {File("file", "Geometry File", "")};
         t.cook = [](CookContext& c) {
-            const std::string& path = c.s("file");
+            const std::string path = resolvePath(c.s("file"));
             if (path.empty()) { c.warning("No file specified."); return; }
             std::string err;
-            if (!loadObj(path, c.out, &err)) c.error(err);
+            std::string ext = path.size() > 5 ? path.substr(path.size() - 5) : "";
+            for (auto& ch : ext) ch = char(std::tolower((unsigned char)ch));
+            bool ok = ext == ".usda" ? loadUsda(path, c.out, &err) : loadObj(path, c.out, &err);
+            if (!ok) c.error(err);
         };
         add(t);
     }
@@ -977,6 +983,8 @@ std::vector<NodeType> buildTypes() {
     registerFluidNodes(types);
     registerVellumNodes(types);
     registerShadingNodes(types);
+    registerRiggingNodes(types);
+    registerCompositingNodes(types);
     return types;
 }
 

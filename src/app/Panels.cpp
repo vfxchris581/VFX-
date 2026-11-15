@@ -1,6 +1,8 @@
 #include "App.h"
+#include "render/GL.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -108,6 +110,48 @@ void App::drawViewport() {
 
     // overlays
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    // images (compositing): shown over the 3D view, fitted to the pane, on a dark checkerboard
+    if (Node* dn = net().displayNode(); dn && !dn->geometry().images.empty() && dn->geometry().images[0].valid() && dn->geometry().numPoints() == 0) {
+        const ImageLayer& L = dn->geometry().images[0];
+        if (dn->cookStamp() != compStamp_ || !compTex_) {
+            compStamp_ = dn->cookStamp();
+            std::vector<uint8_t> rgba(L.pixels() * 4);
+            const std::vector<float>& src = *L.rgba;
+            for (size_t i = 0; i < L.pixels(); ++i) {
+                float a = std::clamp(src[i * 4 + 3], 0.f, 1.f);
+                for (int k = 0; k < 3; ++k) {
+                    float v = a > 1e-6f ? std::clamp(src[i * 4 + size_t(k)] / a, 0.f, 1.f) : 0.f;
+                    v = v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.f / 2.4f) - 0.055f; // sRGB display
+                    rgba[i * 4 + size_t(k)] = uint8_t(v * 255.f + 0.5f);
+                }
+                rgba[i * 4 + 3] = uint8_t(a * 255.f + 0.5f);
+            }
+            if (!compTex_) glGenTextures(1, &compTex_);
+            glBindTexture(GL_TEXTURE_2D, compTex_);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, L.w, L.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            compW_ = L.w; compH_ = L.h;
+        }
+        dl->AddRectFilled(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), IM_COL32(30, 30, 33, 255));
+        float s = std::min((avail.x - 20) / float(compW_), (avail.y - 60) / float(compH_));
+        if (s > 1 && s < 1.5f) s = 1; // show small images 1:1 when they fit
+        ImVec2 sz(float(compW_) * s, float(compH_) * s);
+        ImVec2 a(imgPos.x + (avail.x - sz.x) * 0.5f, imgPos.y + 40 + (avail.y - 60 - sz.y) * 0.5f), b(a.x + sz.x, a.y + sz.y);
+        const float cs = 12;
+        for (float y = a.y; y < b.y; y += cs)
+            for (float x = a.x; x < b.x; x += cs) {
+                bool odd = (int((x - a.x) / cs) + int((y - a.y) / cs)) % 2;
+                dl->AddRectFilled(ImVec2(x, y), ImVec2(std::min(x + cs, b.x), std::min(y + cs, b.y)), odd ? IM_COL32(70, 70, 74, 255) : IM_COL32(50, 50, 54, 255));
+            }
+        dl->AddImage((ImTextureID)(intptr_t)compTex_, a, b);
+        dl->AddRect(a, b, IM_COL32(90, 90, 100, 255));
+    }
     if (activeCamAspect > 0) { // frame of the camera we are looking through
         float va = avail.x / avail.y;
         float fw = va >= activeCamAspect ? avail.y * activeCamAspect : avail.x, fh = va >= activeCamAspect ? avail.y : avail.x / activeCamAspect;
@@ -126,7 +170,9 @@ void App::drawViewport() {
         char buf[256];
         std::snprintf(buf, sizeof buf, "%s  (%s)", d->name().c_str(), d->type().label.c_str());
         dl->AddText(tp, IM_COL32(200, 215, 255, 255), buf);
-        if (!g.volumes.empty() && g.numPoints() == 0)
+        if (!g.images.empty() && g.numPoints() == 0)
+            std::snprintf(buf, sizeof buf, "image  %d x %d%s", g.images[0].w, g.images[0].h, g.images[0].depth ? "  + depth (Z)" : "");
+        else if (!g.volumes.empty() && g.numPoints() == 0)
             std::snprintf(buf, sizeof buf, "volume  %d x %d x %d voxels", g.volumes[0].nx, g.volumes[0].ny, g.volumes[0].nz);
         else
             std::snprintf(buf, sizeof buf, "%zu points  %zu primitives  %zu tris%s", g.numPoints(), g.numPrims(), renderer.stats().triangles, g.volumes.empty() ? "" : "  + volume");

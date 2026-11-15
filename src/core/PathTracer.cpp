@@ -1096,6 +1096,7 @@ struct Scene {
                 if (maxc(beta) < 1e-3f) break;
             }
             if (!hit) {
+                if (bounce == 0 && set.transparentBackground) break;
                 if (envMap.valid()) {
                     Vec3 Le = envMap.eval(ray.d);
                     if (bounce == 0 || specular) L += beta * Le;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(HD VERSION 0.4.0 LANGUAGES C CXX)
+project(HD VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,6 +15,7 @@ option(HD_BUILD_UI_SCREENSHOT_TEST "Linux only: run the UI headlessly via EGL an
 
 # ------------------------------------------------------------------ core engine
 add_library(hd_core STATIC
+  src/core/Compositing.cpp
   src/core/Demo.cpp
   src/core/Denoise.cpp
   src/core/Destruction.cpp
@@ -32,7 +33,9 @@ add_library(hd_core STATIC
   src/core/Ops.cpp
   src/core/PathTracer.cpp
   src/core/Pyro.cpp
+  src/core/Rigging.cpp
   src/core/Shading.cpp
+  src/core/Usd.cpp
   src/core/Sim.cpp
   src/core/Vellum.cpp
   src/core/Volume.cpp

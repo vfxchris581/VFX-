@@ -1,7 +1,9 @@
 // Headless tests for the HD core engine.
 #include "core/Demo.h"
+#include "core/Compositing.h"
 #include "core/Denoise.h"
 #include "core/Expr.h"
+#include "core/Usd.h"
 #include "core/Fluids.h"
 #include "core/Fracture.h"
 #include "core/GeoIO.h"
@@ -543,12 +545,26 @@ TEST(all_nodes_cook_on_defaults) {
         Node* n = g.createNode(t.name);
         CHECK(n != nullptr);
         if (t.name == "input") continue; // only meaningful inside a subnet (covered by the subnet tests)
-        if (t.maxInputs >= 1) g.connect(t.name == "trail" ? g.createNode("popsolver") : src, n, 0);
-        if (t.maxInputs >= 2) g.connect(src2, n, 1);
+        if (t.category == "Compositing") {
+            // image nodes get a small image on every input (the shape mask's second input takes curves)
+            Node* img = g.createNode("copconstant");
+            img->parm("width")->val[0] = 32; img->parm("height")->val[0] = 24;
+            for (int k = 0; k < t.maxInputs; ++k) g.connect(t.name == "copshape" && k == 1 ? src : (t.name == "coprender" ? src : img), n, k);
+            if (t.name == "coprender") { n->parm("width")->val[0] = 32; n->parm("height")->val[0] = 24; n->parm("samples")->val[0] = 2; }
+        } else {
+            if (t.maxInputs >= 1) g.connect(t.name == "trail" ? g.createNode("popsolver") : src, n, 0);
+            if (t.maxInputs >= 2) g.connect(src2, n, 1);
+        }
         g.cook(n);
-        if (t.name != "file" && t.name != "switch" && !n->error().empty())
+        // nodes that need a particular kind of input (a skeleton, a file, matching targets) are expected to
+        // reject a plain sphere with a clear error; they still must not crash or produce broken geometry
+        static const std::set<std::string> picky = {"file", "switch", "fkpose", "ikchain", "capture", "bonedeform", "blendshapes", "bvhimport", "retarget",
+                                                   "copfile", "copzcomp", "copdefocus" /* need a file or depth */};
+        if (!picky.count(t.name) && !n->error().empty())
             std::printf("  node %s error: %s\n", t.name.c_str(), n->error().c_str());
-        CHECK(t.name == "file" || n->error().empty());
+        CHECK(picky.count(t.name) || n->error().empty());
+        if (picky.count(t.name) && t.name != "switch" && t.name != "file") CHECK(!n->error().empty() || t.name == "blendshapes");
+        if (t.category == "Compositing" && n->error().empty()) CHECK(!n->geometry().images.empty() && n->geometry().images[0].valid());
         for (auto& [nm, a] : n->geometry().pointAttribs) CHECK(a.count() == n->geometry().numPoints());
         for (auto& [nm, a] : n->geometry().primAttribs) CHECK(a.count() == n->geometry().numPrims());
         for (int v : n->geometry().vertices) CHECK(v >= 0 && v < int(n->geometry().numPoints()));
@@ -1745,6 +1761,502 @@ TEST(denoiser) {
     float worst = 0;
     for (float v : out) worst = std::max(worst, std::fabs(v - 0.5f));
     CHECK(worst < 1e-5f);
+}
+
+// ---------------------------------------------------------------- rigging (phase 6)
+
+static Vec3 attrV(const Geometry& g, const char* n, size_t i) { const Attrib* a = g.findAttrib(AttribClass::Point, n); return a ? a->getV(i) : Vec3(-999); }
+
+TEST(rig_skeleton_fk_ik) {
+    Graph g;
+    Node* sk = g.createNode("skeleton");
+    sk->parm("bones")->val[0] = 2; sk->parm("length")->val[0] = 0.5f;
+    g.cook(sk);
+    const Geometry& s = sk->geometry();
+    CHECK(s.numPoints() == 3 && s.numPrims() == 2);
+    NEAR(s.findAttrib(AttribClass::Point, "parent")->getF(0), -1.f);
+    NEAR(s.findAttrib(AttribClass::Point, "parent")->getF(2), 1.f);
+    // FK: 90 degrees about Z at the root swings the whole chain to -X; the elbow bend adds on top
+    Node* fk = g.createNode("fkpose");
+    g.connect(sk, fk, 0);
+    fk->parm("joint1")->val[0] = 0; fk->parm("rot1")->val[2] = 90;
+    fk->parm("joint2")->val[0] = 1; fk->parm("rot2")->val[2] = 90;
+    g.cook(fk);
+    CHECK(fk->error().empty());
+    const Geometry& f = fk->geometry();
+    CHECK(length(f.P[1] - Vec3(-0.5f, 0, 0)) < 1e-5f);
+    CHECK(length(f.P[2] - Vec3(-0.5f, -0.5f, 0)) < 1e-5f);
+    CHECK(length(attrV(f, "xfx", 2) - Vec3(-1, 0, 0)) < 1e-5f); // 180 degrees in total
+    // a rot attribute (from a wrangle) works the same way
+    Node* w = g.createNode("attribwrangle");
+    g.connect(sk, w, 0);
+    w->parm("snippet")->str = "if (@ptnum == 0) v@rot = set(0, 0, 90);";
+    Node* fk2 = g.createNode("fkpose");
+    g.connect(w, fk2, 0);
+    fk2->parm("joint1")->val[0] = -1;
+    g.cook(fk2);
+    CHECK(fk2->error().empty() && length(fk2->geometry().P[2] - Vec3(-1, 0, 0)) < 1e-5f);
+
+    // IK: reachable target is hit, bone lengths are kept, the pole chooses the bend side
+    Node* ik = g.createNode("ikchain");
+    g.connect(sk, ik, 0);
+    ik->parm("target")->val[0] = 0.4f; ik->parm("target")->val[1] = 0.6f; ik->parm("target")->val[2] = 0;
+    ik->parm("pole")->val[0] = 1; ik->parm("pole")->val[1] = 0; ik->parm("pole")->val[2] = 0;
+    g.cook(ik);
+    CHECK(ik->error().empty());
+    const Geometry& k = ik->geometry();
+    CHECK(length(k.P[2] - Vec3(0.4f, 0.6f, 0)) < 1e-3f);
+    NEAR(length(k.P[1] - k.P[0]), 0.5f);
+    NEAR(length(k.P[2] - k.P[1]), 0.5f);
+    CHECK(k.P[1].x > 0.2f); // elbow toward the +X pole
+    ik->parm("pole")->val[0] = -1; ik->touch();
+    g.cook(ik);
+    CHECK(ik->geometry().P[1].x < 0.f);
+    // the world rotations agree with the new bone directions
+    Vec3 boneDir = normalize(ik->geometry().P[2] - ik->geometry().P[1]);
+    {
+        const Geometry& kk = ik->geometry();
+        Vec3 c0 = attrV(kk, "xfx", 1), c1 = attrV(kk, "xfy", 1), c2 = attrV(kk, "xfz", 1);
+        Vec3 rotated = c0 * 0 + c1 * 1 + c2 * 0; // rest bone direction is +Y
+        CHECK(length(rotated - boneDir) < 1e-3f);
+    }
+    // unreachable: the chain points straight at the target
+    ik->parm("target")->val[0] = 3; ik->parm("target")->val[1] = 0; ik->touch();
+    g.cook(ik);
+    CHECK(length(ik->geometry().P[2] - Vec3(1, 0, 0)) < 1e-4f);
+}
+
+TEST(rig_skinning_blendshapes_retarget) {
+    Graph g;
+    Node* tube = g.createNode("tube"); // an arm: thin compared to its length
+    tube->parm("rad1")->val[0] = tube->parm("rad2")->val[0] = 0.2f;
+    tube->parm("rows")->val[0] = 9;
+    g.cook(tube);
+    Vec3 mn, mx;
+    tube->geometry().bounds(mn, mx);
+    Node* sk = g.createNode("skeleton");
+    sk->parm("bones")->val[0] = 2;
+    sk->parm("length")->val[0] = (mx.y - mn.y) * 0.5f;
+    sk->parm("origin")->val[1] = mn.y;
+    Node* cap = g.createNode("capture");
+    g.connect(tube, cap, 0);
+    g.connect(sk, cap, 1);
+    g.cook(cap);
+    CHECK(cap->error().empty());
+    const Attrib* w0 = cap->geometry().findAttrib(AttribClass::Point, "bw0");
+    CHECK(w0 != nullptr);
+    bool normalized = true;
+    for (size_t i = 0; i < cap->geometry().numPoints(); ++i) {
+        float sum = 0;
+        for (int k = 0; k < 4; ++k) sum += cap->geometry().findAttrib(AttribClass::Point, "bw" + std::to_string(k))->getF(i);
+        normalized = normalized && std::fabs(sum - 1) < 1e-4f;
+    }
+    CHECK(normalized);
+    Node* fk = g.createNode("fkpose");
+    g.connect(sk, fk, 0);
+    fk->parm("joint1")->val[0] = 0; fk->parm("rot1")->val[0] = 90;
+    Node* bd = g.createNode("bonedeform");
+    g.connect(cap, bd, 0);
+    g.connect(sk, bd, 1);
+    g.connect(fk, bd, 2);
+    g.cook(bd);
+    CHECK(bd->error().empty());
+    // rotating the root moves the whole mesh rigidly
+    bool rigid = true;
+    const Vec3 piv(0, mn.y, 0);
+    for (size_t i = 0; i < tube->geometry().numPoints(); ++i) {
+        Vec3 d = tube->geometry().P[i] - piv;
+        Vec3 want = piv + Vec3(d.x, -d.z, d.y); // +90 about X
+        rigid = rigid && length(bd->geometry().P[i] - want) < 1e-4f;
+    }
+    CHECK(rigid);
+    // bending the middle joint moves the top end and leaves the bottom end alone
+    fk->parm("joint1")->val[0] = 1; fk->touch();
+    g.cook(bd);
+    float bottomMove = 0, topMove = 0;
+    for (size_t i = 0; i < tube->geometry().numPoints(); ++i) {
+        float m = length(bd->geometry().P[i] - tube->geometry().P[i]);
+        if (tube->geometry().P[i].y < mn.y + 0.01f) bottomMove = std::max(bottomMove, m);
+        if (tube->geometry().P[i].y > mx.y - 0.01f) topMove = std::max(topMove, m);
+    }
+    CHECK(bottomMove < 0.05f && topMove > 0.5f);
+
+    // blend shapes: weight 0.5 is halfway to the target
+    Node* xf = g.createNode("xform");
+    g.connect(tube, xf, 0);
+    xf->parm("t")->val[0] = 2;
+    Node* bs = g.createNode("blendshapes");
+    g.connect(tube, bs, 0);
+    g.connect(xf, bs, 1);
+    bs->parm("w1")->val[0] = 0.5f;
+    g.cook(bs);
+    CHECK(bs->error().empty() && std::fabs(bs->geometry().P[0].x - tube->geometry().P[0].x - 1) < 1e-5f);
+
+    // retarget onto a skeleton twice the size: the pose is copied, positions scale
+    Node* big = g.createNode("skeleton");
+    big->parm("bones")->val[0] = 2; big->parm("length")->val[0] = sk->parm("length")->val[0] * 2; big->parm("origin")->val[1] = mn.y * 2;
+    Node* rt = g.createNode("retarget");
+    g.connect(big, rt, 0);
+    g.connect(sk, rt, 1);
+    g.connect(fk, rt, 2);
+    g.cook(rt);
+    CHECK(rt->error().empty());
+    bool scaled = true;
+    for (size_t j = 0; j < 3; ++j) scaled = scaled && length(rt->geometry().P[j] - fk->geometry().P[j] * 2) < 1e-4f;
+    CHECK(scaled);
+    // mismatched hierarchies are refused
+    big->parm("bones")->val[0] = 3; big->touch();
+    g.cook(rt);
+    CHECK(!rt->error().empty());
+}
+
+TEST(rig_bvh_and_timeshift) {
+    const char* bvh =
+        "HIERARCHY\nROOT Hips\n{\n  OFFSET 0 0 0\n  CHANNELS 6 Xposition Yposition Zposition Zrotation Xrotation Yrotation\n"
+        "  JOINT Spine\n  {\n    OFFSET 0 10 0\n    CHANNELS 3 Zrotation Xrotation Yrotation\n"
+        "    End Site\n    {\n      OFFSET 0 10 0\n    }\n  }\n}\n"
+        "MOTION\nFrames: 2\nFrame Time: 0.5\n0 90 0 0 0 0 0 0 0\n0 90 0 90 0 0 0 0 0\n";
+    { FILE* f = std::fopen("hd_test.bvh", "wb"); std::fputs(bvh, f); std::fclose(f); }
+    Graph g;
+    Node* b = g.createNode("bvhimport");
+    b->parm("file")->str = "hd_test.bvh";
+    b->parm("scale")->val[0] = 0.1f;
+    b->parm("loop")->val[0] = 0;
+    g.frame = 1; g.cook(b);
+    CHECK(b->error().empty());
+    const Geometry& s0 = b->geometry();
+    CHECK(s0.numPoints() == 3 && s0.numPrims() == 2);
+    CHECK(length(s0.P[0] - Vec3(0, 9, 0)) < 1e-4f && length(s0.P[1] - Vec3(0, 10, 0)) < 1e-4f && length(s0.P[2] - Vec3(0, 11, 0)) < 1e-4f);
+    // frame 13 at 24 fps is 0.5 s = BVH frame 1: the hips turn 90 degrees about Z
+    g.frame = 13; g.cook(b);
+    const Geometry& s1 = b->geometry();
+    CHECK(length(s1.P[1] - Vec3(-1, 9, 0)) < 1e-4f && length(s1.P[2] - Vec3(-2, 9, 0)) < 1e-4f);
+    // halfway (frame 7) interpolates the channels: 45 degrees
+    g.frame = 7; g.cook(b);
+    CHECK(length(b->geometry().P[1] - Vec3(-std::sqrt(0.5f), 9 + std::sqrt(0.5f), 0)) < 1e-4f);
+    // a broken file is reported
+    { FILE* f = std::fopen("hd_bad.bvh", "wb"); std::fputs("HIERARCHY\nROOT A\n{\n OFFSET 0 0 0\n CHANNELS 1 Wrotation\n}\n", f); std::fclose(f); }
+    b->parm("file")->str = "hd_bad.bvh"; b->touch();
+    g.cook(b);
+    CHECK(b->error().find("Unknown channel") != std::string::npos);
+    std::remove("hd_test.bvh");
+    std::remove("hd_bad.bvh");
+    // Time Shift: the input as it was five frames earlier
+    Node* box = g.createNode("box");
+    box->parm("t")->expr[0] = "$F * 0.1";
+    Node* ts = g.createNode("timeshift");
+    g.connect(box, ts, 0);
+    ts->parm("offset")->val[0] = -5;
+    g.frame = 20; g.cook(ts);
+    Vec3 mn, mx;
+    ts->geometry().bounds(mn, mx);
+    CHECK(std::fabs((mn.x + mx.x) * 0.5f - 1.5f) < 1e-4f);
+}
+
+// ---------------------------------------------------------------- compositing (phase 6)
+
+static const float* px(const Node* n, int x, int y) {
+    const ImageLayer& L = n->geometry().images[0];
+    return &(*L.rgba)[(size_t(y) * size_t(L.w) + size_t(x)) * 4];
+}
+static double meanChannel(const Node* n, int ch) {
+    const ImageLayer& L = n->geometry().images[0];
+    double s = 0;
+    for (size_t i = 0; i < L.pixels(); ++i) s += (*L.rgba)[i * 4 + size_t(ch)];
+    return s / double(L.pixels());
+}
+static Node* constantImg(Graph& g, Vec3 col, float alpha = 1, int w = 64, int h = 48) {
+    Node* c = g.createNode("copconstant");
+    c->parm("width")->val[0] = float(w); c->parm("height")->val[0] = float(h);
+    c->parm("color")->val[0] = col.x; c->parm("color")->val[1] = col.y; c->parm("color")->val[2] = col.z;
+    c->parm("alpha")->val[0] = alpha;
+    return c;
+}
+
+TEST(comp_color_blur_merge_key) {
+    Graph g;
+    Node* k = constantImg(g, Vec3(0.2f, 0.4f, 0.1f));
+    Node* cc = g.createNode("copcolor");
+    g.connect(k, cc, 0);
+    cc->parm("exposure")->val[0] = 1;
+    g.cook(cc);
+    CHECK(cc->error().empty());
+    NEAR(px(cc, 5, 5)[0], 0.4f); NEAR(px(cc, 5, 5)[1], 0.8f);
+    cc->parm("exposure")->val[0] = 0; cc->parm("saturation")->val[0] = 0; cc->touch();
+    g.cook(cc);
+    float l = 0.2126f * 0.2f + 0.7152f * 0.4f + 0.0722f * 0.1f;
+    NEAR(px(cc, 5, 5)[0], l); NEAR(px(cc, 5, 5)[2], l);
+    cc->parm("saturation")->val[0] = 1; cc->parm("invert")->val[0] = 1; cc->touch();
+    g.cook(cc);
+    NEAR(px(cc, 5, 5)[0], 0.8f);
+    // blur keeps the total amount of light (checker in, smooth out)
+    Node* chk = g.createNode("copconstant");
+    chk->parm("width")->val[0] = 64; chk->parm("height")->val[0] = 64; chk->parm("mode")->val[0] = 3; chk->parm("checker")->val[0] = 8;
+    Node* bl = g.createNode("copblur");
+    g.connect(chk, bl, 0);
+    bl->parm("size")->val[0] = 16;
+    g.cook(bl);
+    CHECK(std::fabs(meanChannel(bl, 0) - meanChannel(chk, 0)) < 0.01);
+    float mn = 1e9f, mx = -1e9f;
+    for (int x = 16; x < 48; ++x) { mn = std::min(mn, px(bl, x, 32)[0]); mx = std::max(mx, px(bl, x, 32)[0]); }
+    CHECK(mx - mn < 0.1f); // the checker pattern is smoothed away
+    // premultiplied over: 50% red over blue
+    Node* a = constantImg(g, Vec3(1, 0, 0), 0.5f);
+    Node* b = constantImg(g, Vec3(0, 0, 1), 1);
+    Node* mg = g.createNode("copmerge");
+    g.connect(a, mg, 0);
+    g.connect(b, mg, 1);
+    g.cook(mg);
+    NEAR(px(mg, 3, 3)[0], 0.5f); NEAR(px(mg, 3, 3)[2], 0.5f); NEAR(px(mg, 3, 3)[3], 1.f);
+    mg->parm("operation")->val[0] = 4; mg->touch(); // multiply
+    g.cook(mg);
+    NEAR(px(mg, 3, 3)[0], 0.f); NEAR(px(mg, 3, 3)[3], 0.5f);
+    // chroma key: the green screen goes transparent, other colours stay
+    Node* gr = constantImg(g, Vec3(0.1f, 0.8f, 0.2f));
+    Node* key = g.createNode("copkey");
+    g.connect(gr, key, 0);
+    g.cook(key);
+    CHECK(px(key, 3, 3)[3] < 0.01f);
+    Node* red = constantImg(g, Vec3(0.8f, 0.2f, 0.2f));
+    g.connect(red, key, 0);
+    g.cook(key);
+    CHECK(px(key, 3, 3)[3] > 0.99f);
+    // glow brightens around a bright spot but leaves dark images alone
+    Node* gl = g.createNode("copglow");
+    g.connect(k, gl, 0);
+    g.cook(gl);
+    NEAR(px(gl, 5, 5)[0], 0.2f);
+}
+
+TEST(comp_shape_transform_lens_resize) {
+    Graph g;
+    // a square covering the left half of the frame
+    Node* sq = g.createNode("grid");
+    sq->parm("orient")->val[0] = 1; sq->parm("sizex")->val[0] = 0.5f; sq->parm("sizey")->val[0] = 1;
+    sq->parm("t")->val[0] = 0.25f; sq->parm("t")->val[1] = 0.5f; sq->parm("rows")->val[0] = 2; sq->parm("cols")->val[0] = 2;
+    Node* sh = g.createNode("copshape");
+    g.connect(sq, sh, 1);
+    sh->parm("width")->val[0] = 64; sh->parm("height")->val[0] = 32; sh->parm("feather")->val[0] = 0;
+    g.cook(sh);
+    CHECK(sh->error().empty());
+    NEAR(px(sh, 10, 16)[3], 1.f); NEAR(px(sh, 50, 16)[3], 0.f);
+    CHECK(std::fabs(meanChannel(sh, 3) - 0.5) < 0.02);
+    sh->parm("invert")->val[0] = 1; sh->touch();
+    g.cook(sh);
+    NEAR(px(sh, 10, 16)[3], 0.f);
+    // transform: move 10 pixels right
+    Node* chk = g.createNode("copconstant");
+    chk->parm("width")->val[0] = 64; chk->parm("height")->val[0] = 32; chk->parm("mode")->val[0] = 2; // horizontal ramp
+    chk->parm("color")->val[0] = 0; chk->parm("color2")->val[0] = 1;
+    Node* tr = g.createNode("coptransform");
+    g.connect(chk, tr, 0);
+    tr->parm("t")->val[0] = 10;
+    g.cook(tr);
+    NEAR(px(tr, 30, 5)[0], px(chk, 20, 5)[0]);
+    NEAR(px(tr, 3, 5)[3], 0.f); // uncovered pixels are transparent
+    // lens: vignette darkens the corners only; with everything at zero it changes nothing
+    Node* flat = constantImg(g, Vec3(0.5f));
+    Node* ln = g.createNode("coplens");
+    g.connect(flat, ln, 0);
+    ln->parm("vignette")->val[0] = 0.8f;
+    g.cook(ln);
+    CHECK(px(ln, 0, 0)[0] < 0.3f && std::fabs(px(ln, 32, 24)[0] - 0.5f) < 1e-4f);
+    ln->parm("vignette")->val[0] = 0; ln->touch();
+    g.cook(ln);
+    NEAR(px(ln, 0, 0)[0], 0.5f);
+    // resize: half size, same average
+    Node* rs = g.createNode("copresize");
+    g.connect(chk, rs, 0);
+    rs->parm("width")->val[0] = 32;
+    g.cook(rs);
+    CHECK(rs->geometry().images[0].w == 32 && rs->geometry().images[0].h == 16);
+    CHECK(std::fabs(meanChannel(rs, 0) - meanChannel(chk, 0)) < 0.01);
+}
+
+TEST(comp_files_depth_render) {
+    // write an image with depth to EXR and PNG, read both back
+    ImageLayer L;
+    L.w = 16; L.h = 8;
+    auto rgba = std::make_shared<std::vector<float>>(size_t(16 * 8 * 4));
+    auto z = std::make_shared<std::vector<float>>(size_t(16 * 8));
+    for (int i = 0; i < 16 * 8; ++i) {
+        (*rgba)[size_t(i) * 4] = 0.25f; (*rgba)[size_t(i) * 4 + 1] = 0.5f; (*rgba)[size_t(i) * 4 + 2] = 1.f; (*rgba)[size_t(i) * 4 + 3] = 1.f;
+        (*z)[size_t(i)] = i % 16 < 8 ? 2.f : 10.f; // near on the left, far on the right
+    }
+    L.rgba = rgba; L.depth = z;
+    CHECK(expandFrame("a.$F4.exr", 7) == "a.0007.exr" && expandFrame("b$F.png", 12) == "b12.png");
+    CHECK(writeImageLayer("hd_comp.$F2.exr", L, 3));
+    CHECK(writeImageLayer("hd_comp.png", L, 1));
+    Graph g;
+    Node* fe = g.createNode("copfile");
+    fe->parm("file")->str = "hd_comp.$F2.exr";
+    g.frame = 3; g.cook(fe);
+    CHECK(fe->error().empty());
+    const ImageLayer& R = fe->geometry().images[0];
+    CHECK(R.w == 16 && R.h == 8 && R.depth && R.depth->size() == 128);
+    if (R.depth) { NEAR((*R.depth)[0], 2.f); NEAR((*R.depth)[15], 10.f); }
+    NEAR(px(fe, 3, 3)[1], 0.5f);
+    Node* fp = g.createNode("copfile");
+    fp->parm("file")->str = "hd_comp.png";
+    g.cook(fp);
+    CHECK(std::fabs(px(fp, 3, 3)[1] - 0.5f) < 0.01f); // sRGB encode/decode round trip
+    // depth composite: a red image at depth 5 everywhere goes in front of the far half only
+    ImageLayer L2 = L;
+    auto rgba2 = std::make_shared<std::vector<float>>(*rgba);
+    auto z2 = std::make_shared<std::vector<float>>(size_t(128), 5.f);
+    for (int i = 0; i < 128; ++i) { (*rgba2)[size_t(i) * 4] = 1; (*rgba2)[size_t(i) * 4 + 1] = 0; (*rgba2)[size_t(i) * 4 + 2] = 0; }
+    L2.rgba = rgba2; L2.depth = z2;
+    CHECK(writeImageLayer("hd_comp_red.exr", L2, 1));
+    Node* fr = g.createNode("copfile");
+    fr->parm("file")->str = "hd_comp_red.exr";
+    Node* zc = g.createNode("copzcomp");
+    g.connect(fr, zc, 0);
+    g.connect(fe, zc, 1);
+    g.cook(zc);
+    CHECK(zc->error().empty());
+    NEAR(px(zc, 2, 2)[0], 0.25f); // left: the depth-2 image wins
+    NEAR(px(zc, 12, 2)[0], 1.f);  // right: red at depth 5 is nearer than 10
+    // defocus: the near (in focus) half stays sharp, the far half is blurred
+    Node* df = g.createNode("copdefocus");
+    g.connect(zc, df, 0);
+    df->parm("focus")->val[0] = 2; df->parm("range")->val[0] = 3; df->parm("maxblur")->val[0] = 3;
+    g.cook(df);
+    CHECK(df->error().empty());
+    NEAR(px(df, 2, 2)[0], 0.25f);
+    for (const char* f : {"hd_comp.03.exr", "hd_comp.png", "hd_comp_red.exr"}) std::remove(f);
+    // missing files are reported
+    fp->parm("file")->str = "no_such_image.png"; fp->touch();
+    g.cook(fp);
+    CHECK(!fp->error().empty());
+    // Render: a sphere over a transparent background, with depth
+    Node* sp = g.createNode("sphere");
+    Node* rn = g.createNode("coprender");
+    g.connect(sp, rn, 0);
+    rn->parm("width")->val[0] = 48; rn->parm("height")->val[0] = 32; rn->parm("samples")->val[0] = 4; rn->parm("denoise")->val[0] = 0;
+    g.cook(rn);
+    CHECK(rn->error().empty());
+    NEAR(px(rn, 24, 16)[3], 1.f);
+    NEAR(px(rn, 0, 0)[3], 0.f);
+    const ImageLayer& RL = rn->geometry().images[0];
+    CHECK(RL.depth && (*RL.depth)[16 * 48 + 24] < 1e9f && (*RL.depth)[0] > 1e9f);
+    // Write node writes when enabled
+    Node* wr = g.createNode("copwrite");
+    g.connect(rn, wr, 0);
+    wr->parm("file")->str = "hd_written.png";
+    g.cook(wr);
+    CHECK(std::fopen("hd_written.png", "rb") == nullptr);
+    wr->parm("enable")->val[0] = 1; wr->touch();
+    g.cook(wr);
+    FILE* f = std::fopen("hd_written.png", "rb");
+    CHECK(f != nullptr);
+    if (f) std::fclose(f);
+    std::remove("hd_written.png");
+}
+
+// ---------------------------------------------------------------- USD (phase 6)
+
+static std::string slurp(const char* path) {
+    std::string out;
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return out;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    return out;
+}
+
+TEST(usd_export_import) {
+    Graph g;
+    Node* box = g.createNode("box");
+    Node* uv = g.createNode("uvproject");
+    g.connect(box, uv, 0);
+    Node* m = g.createNode("material");
+    g.connect(uv, m, 0);
+    m->parm("group")->str = "0-2";
+    m->parm("metal")->val[0] = 1; m->parm("rough")->val[0] = 0.2f; m->parm("setcolor")->val[0] = 1;
+    Node* cam = g.createNode("camera");
+    (void)cam;
+    Node* light = g.createNode("spotlight");
+    (void)light;
+    g.cook(m);
+    UsdExport ue;
+    ue.cameras = collectCameras(g, 1);
+    ue.lights = collectLights(g, 1);
+    std::string err;
+    CHECK(writeUsda("hd_t.usda", ue, [&](float, Geometry& out, std::string*) { out = m->geometry(); return true; }, &err));
+    std::string text = slurp("hd_t.usda");
+    CHECK(text.rfind("#usda 1.0", 0) == 0);
+    for (const char* needle : {"def Mesh \"geo\"", "faceVertexCounts", "primvars:st", "def GeomSubset", "familyName = \"materialBind\"",
+                               "UsdPreviewSurface", "inputs:metallic = 1", "def Camera", "focalLength", "def SphereLight", "ShapingAPI"})
+        if (text.find(needle) == std::string::npos) { std::printf("  missing in usda: %s\n", needle); CHECK(false); }
+    // balanced braces and brackets
+    int braces = 0, brackets = 0;
+    for (char ch : text) { braces += ch == '{' ? 1 : ch == '}' ? -1 : 0; brackets += ch == '[' ? 1 : ch == ']' ? -1 : 0; }
+    CHECK(braces == 0 && brackets == 0);
+    // read back: same shape, uvs and colours survive
+    Geometry back;
+    CHECK(loadUsda("hd_t.usda", back, &err));
+    CHECK(back.numPoints() == m->geometry().numPoints() && back.numPrims() == m->geometry().numPrims());
+    float md = 0;
+    for (size_t i = 0; i < back.numPoints() && i < m->geometry().numPoints(); ++i) md = std::max(md, length(back.P[i] - m->geometry().P[i]));
+    CHECK(md < 1e-5f);
+    CHECK(back.findAttrib(AttribClass::Point, "uv") != nullptr);
+    CHECK(back.findAttrib(AttribClass::Prim, "Cd") != nullptr);
+    // through the File node too
+    Node* fl = g.createNode("file");
+    fl->parm("file")->str = "hd_t.usda";
+    g.cook(fl);
+    CHECK(fl->error().empty() && fl->geometry().numPrims() == back.numPrims());
+
+    // animation: points are time-sampled over the range
+    Node* moving = g.createNode("xform");
+    g.connect(box, moving, 0);
+    moving->parm("t")->expr[1] = "$F * 0.5";
+    UsdExport anim;
+    anim.start = 1; anim.end = 5;
+    CHECK(writeUsda("hd_anim.usda", anim, [&](float f, Geometry& out, std::string*) { g.frame = f; g.cook(moving); out = moving->geometry(); return true; }, &err));
+    text = slurp("hd_anim.usda");
+    CHECK(text.find("points.timeSamples") != std::string::npos && text.find("startTimeCode = 1") != std::string::npos && text.find("endTimeCode = 5") != std::string::npos);
+    CHECK(text.find("        5: [") != std::string::npos);
+    // a changing point count is refused with a clear message
+    Node* sc = g.createNode("scatter");
+    g.connect(box, sc, 0);
+    sc->parm("npts")->expr[0] = "$F * 10";
+    CHECK(!writeUsda("hd_bad.usda", anim, [&](float f, Geometry& out, std::string*) { g.frame = f; g.cook(sc); out = sc->geometry(); return true; }, &err));
+    CHECK(err.find("point count changes") != std::string::npos);
+
+    // a hand-written stage: nested transforms (translate, rotateXYZ, scale), a left-handed mesh, curves, points
+    const char* hand =
+        "#usda 1.0\n( upAxis = \"Y\" )\n"
+        "def Xform \"root\" {\n"
+        "  double3 xformOp:translate = (10, 0, 0)\n"
+        "  uniform token[] xformOpOrder = [\"xformOp:translate\"]\n"
+        "  def Mesh \"tri\" ( prepend apiSchemas = [\"MaterialBindingAPI\"] ) {\n"
+        "    float3 xformOp:rotateXYZ = (0, 0, 90)\n    float3 xformOp:scale = (2, 2, 2)\n"
+        "    uniform token[] xformOpOrder = [\"xformOp:rotateXYZ\", \"xformOp:scale\"]\n"
+        "    int[] faceVertexCounts = [3]\n    int[] faceVertexIndices = [0, 1, 2]\n"
+        "    point3f[] points = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]\n"
+        "    uniform token orientation = \"leftHanded\"\n"
+        "    color3f[] primvars:displayColor = [(1, 0, 0)] ( interpolation = \"constant\" )\n"
+        "  }\n"
+        "  def BasisCurves \"hair\" { int[] curveVertexCounts = [3]\n point3f[] points = [(0,0,0), (0,1,0), (0,2,0)] }\n"
+        "  def Points \"dust\" { point3f[] points.timeSamples = { 1: [(5, 5, 5)], 2: [(6, 6, 6)] }\n float[] widths = [0.5] }\n"
+        "}\n";
+    { FILE* f = std::fopen("hd_hand.usda", "wb"); std::fputs(hand, f); std::fclose(f); }
+    Geometry h;
+    CHECK(loadUsda("hd_hand.usda", h, &err));
+    CHECK(h.numPoints() == 7 && h.numPrims() == 2);
+    // (1,0,0) scaled by 2 then rotated 90 about Z -> (0,2,0), then translated -> (10,2,0)
+    CHECK(length(h.P[0] - Vec3(10, 2, 0)) < 1e-4f);
+    CHECK(length(h.P[1] - Vec3(8, 0, 0)) < 1e-4f);
+    CHECK(h.primVertex(0, 0) == 2); // left-handed winding is flipped
+    CHECK(!h.prims[1].closed);
+    CHECK(length(h.P[6] - Vec3(15, 5, 5)) < 1e-4f); // first time sample
+    // binary USD is reported clearly
+    { FILE* f = std::fopen("hd_bin.usd", "wb"); std::fputs("PXR-USDC....", f); std::fclose(f); }
+    CHECK(!loadUsda("hd_bin.usd", h, &err) && err.find("Binary") != std::string::npos);
+    for (const char* f : {"hd_t.usda", "hd_anim.usda", "hd_bad.usda", "hd_hand.usda", "hd_bin.usd"}) std::remove(f);
 }
 
 #ifdef HD_EXAMPLES_DIR

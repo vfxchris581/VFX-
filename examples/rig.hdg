@@ -1,0 +1,140 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 1,
+  "nodes": [
+    {
+      "inputs": [],
+      "name": "arm",
+      "parms": {
+        "cols": 24,
+        "rad1": 0.119999997,
+        "rad2": 0.180000007,
+        "rows": 24,
+        "t": [0, 1, 0]
+      },
+      "type": "tube",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": [null],
+      "name": "rest_skeleton",
+      "parms": {
+        "bones": 2,
+        "length": 1
+      },
+      "type": "skeleton",
+      "x": 250,
+      "y": 0
+    },
+    {
+      "inputs": ["arm", "rest_skeleton"],
+      "name": "capture",
+      "parms": {},
+      "type": "capture",
+      "x": 0,
+      "y": 100
+    },
+    {
+      "inputs": ["rest_skeleton"],
+      "name": "ik",
+      "parms": {
+        "target": [0.5, 0.800000012, 0],
+        "target.expr": ["cos($T * 2) * 1.2", "0.9 + sin($T * 3) * 0.4", "sin($T * 2) * 0.8"]
+      },
+      "type": "ikchain",
+      "x": 250,
+      "y": 100
+    },
+    {
+      "inputs": ["capture", "rest_skeleton", "ik"],
+      "name": "skin",
+      "parms": {},
+      "type": "bonedeform",
+      "x": 0,
+      "y": 200
+    },
+    {
+      "inputs": ["skin"],
+      "name": "normals",
+      "parms": {},
+      "type": "normal",
+      "x": 0,
+      "y": 280
+    },
+    {
+      "inputs": ["normals"],
+      "name": "skin_color",
+      "parms": {
+        "class": 1,
+        "color": [0.850000024, 0.600000024, 0.449999988]
+      },
+      "type": "color",
+      "x": 0,
+      "y": 360
+    },
+    {
+      "inputs": [],
+      "name": "target_marker",
+      "parms": {
+        "rad": [0.0700000003, 0.0700000003, 0.0700000003],
+        "t": [0, 0, 0],
+        "t.expr": ["cos($T * 2) * 1.2", "0.9 + sin($T * 3) * 0.4", "sin($T * 2) * 0.8"]
+      },
+      "type": "sphere",
+      "x": 500,
+      "y": 0
+    },
+    {
+      "inputs": ["target_marker"],
+      "name": "target_color",
+      "parms": {
+        "color": [1, 0.300000012, 0.200000003]
+      },
+      "type": "color",
+      "x": 500,
+      "y": 100
+    },
+    {
+      "inputs": ["skin_color", "ik", "target_color", null, null, null, null, null],
+      "name": "merge",
+      "parms": {},
+      "type": "merge",
+      "x": 0,
+      "y": 450
+    },
+    {
+      "inputs": ["merge"],
+      "name": "OUT",
+      "parms": {},
+      "type": "null",
+      "x": 0,
+      "y": 540
+    }
+  ],
+  "range": [1, 144],
+  "render": {
+    "bounces": 4,
+    "camera": [0, 1, 0, 30, 15, 5.5, 45],
+    "curveWidth": 0.0120000001,
+    "denoise": false,
+    "dof": false,
+    "exposure": 1,
+    "focusDist": 5,
+    "fstop": 4,
+    "ground": true,
+    "groundY": 0,
+    "height": 540,
+    "motionBlur": false,
+    "samples": 64,
+    "shutter": 0.5,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

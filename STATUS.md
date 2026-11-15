@@ -11,7 +11,7 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Engine / UI split | Working | `hd_core` (no UI deps), `hd_render` (OpenGL 3.3), `hd_app` (Dear ImGui), `hdc` headless CLI |
 | Node graph with cook caching and time dependence | Working | Recooks only what changed |
 | Network editor, parameter pane, spreadsheet, timeline | Working | Tab menu, wiring, display/bypass flags, subnets, assets |
-| Houdini-style menus and shelf | Partial | File, Edit, Render, Assets, Windows, Help; shelf tabs Create, Modify, Lights and Cameras, Particles, Pyro FX, Rigid Bodies, Fluids, Vellum. No separate Modeling / Rigging / Solaris / Compositing menus yet |
+| Houdini-style menus and shelf | Partial | File, Edit, Render, Assets, Windows, Help; shelf tabs Create, Modify, Lights and Cameras, Particles, Pyro FX, Rigid Bodies, Fluids, Vellum, Rigging, Compositing. No separate Modeling / Rigging / Solaris / Compositing menus yet |
 | Dockable panes | Partial | Panes can be shown, hidden and reset; free docking and multi-monitor windows are not done |
 | Viewport | Working | Perspective, MSAA, wireframe, points, normals, ground grid, Display Options |
 | Orthographic views | Planned | |
@@ -86,9 +86,21 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Area | Status | Notes |
 |---|---|---|
 | Keyframes, curves, expressions | Working | Every numeric parameter; Animation Editor |
-| Rigging, IK/FK, skinning, blend shapes, mocap, crowds | Planned | |
-| OpenUSD / Solaris | Planned | |
-| COP compositing | Planned | |
+| Skeletons, FK | Working | Joint chains or bones from curves; local rotations from parameters or a `rot` attribute. Tested against hand-computed poses |
+| IK | Working | FABRIK chains with a pole vector and blend. Tested: reaches the target, keeps bone lengths, bends toward the pole, straightens toward unreachable targets |
+| Skinning | Working | Automatic distance-based weights (4 influences) and linear blend skinning. Tested: rigid moves are exact, bends move only the right part. No weight painting, dual-quaternion skinning or heat-diffusion weights |
+| Blend shapes | Working | Up to four weighted targets |
+| Motion capture | Working | BVH import (any channel order), interpolated and optionally looped. Tested against hand-computed joint positions |
+| Retargeting | Partial | Between skeletons with the same joints in the same order (rotations copied, root travel scaled). No name-based joint mapping between different hierarchies |
+| Time Shift | Working | |
+| Crowds | Planned | |
+| Node-based compositing | Working | 15 COP nodes: render, file (sequences, EXR Z), constant/ramp/checker, color correct, blur, glow, merge (10 modes), Z composite, chroma key + despill, shape mask (roto), transform, lens effects, defocus, resize, write. Premultiplied linear RGBA. Tests check the maths of each |
+| Rotoscoping | Partial | Masks from animated curves (anti-aliased, feathered). No interactive shape editing in the viewer |
+| Tracking | Planned | No 2D or camera tracking |
+| Image viewing | Partial | Images show in the Scene View (sRGB). No channel/AOV switching, zoom/pan or pixel readout yet |
+| USD export | Working | .usda: mesh (normals, displayColor, st), GeomSubsets per material, UsdPreviewSurface + UsdUVTexture, curves, points, cameras, UsdLux lights (HDRI dome), time-sampled animation. Written without the USD library and checked by round-tripping (exact positions); not yet validated with usdchecker |
+| USD import | Partial | .usda meshes, curves and points with xformOps, colours, normals, uvs (first time sample). No binary .usdc, references, payloads, variants or sublayers |
+| LOPs / Solaris (stage editing, layers, variants) | Planned | |
 | Python scripting | Planned | VEX-lite and parameter expressions exist |
 
 ## Phase 7: testing and stability

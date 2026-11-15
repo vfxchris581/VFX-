@@ -1,0 +1,173 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 1,
+  "nodes": [
+    {
+      "inputs": [],
+      "name": "ball",
+      "parms": {
+        "cols": 64,
+        "rows": 32,
+        "t": [0, 1, 0]
+      },
+      "type": "sphere",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": ["ball"],
+      "name": "chrome",
+      "parms": {
+        "metal": 1,
+        "rough": 0.150000006
+      },
+      "type": "material",
+      "x": 0,
+      "y": 80
+    },
+    {
+      "inputs": [],
+      "name": "crate",
+      "parms": {
+        "t": [2.20000005, 0.5, -3]
+      },
+      "type": "box",
+      "x": 220,
+      "y": 0
+    },
+    {
+      "inputs": ["crate"],
+      "name": "glow_strip",
+      "parms": {
+        "color": [1, 0.550000012, 0.200000003],
+        "emit": 6,
+        "group": "@P.y > 0.9",
+        "setcolor": 1
+      },
+      "type": "material",
+      "x": 220,
+      "y": 80
+    },
+    {
+      "inputs": ["chrome", "glow_strip", null, null, null, null, null, null],
+      "name": "scene",
+      "parms": {},
+      "type": "merge",
+      "x": 100,
+      "y": 160
+    },
+    {
+      "inputs": ["scene"],
+      "name": "render",
+      "parms": {
+        "height": 270,
+        "samples": 24,
+        "width": 480
+      },
+      "type": "coprender",
+      "x": 100,
+      "y": 240
+    },
+    {
+      "inputs": [],
+      "name": "background",
+      "parms": {
+        "color": [0.0500000007, 0.0599999987, 0.119999997],
+        "color2": [0.349999994, 0.300000012, 0.400000006],
+        "height": 270,
+        "mode": 1,
+        "width": 480
+      },
+      "type": "copconstant",
+      "x": 350,
+      "y": 240
+    },
+    {
+      "inputs": ["render", "background"],
+      "name": "over",
+      "parms": {},
+      "type": "copmerge",
+      "x": 100,
+      "y": 320
+    },
+    {
+      "inputs": ["over"],
+      "name": "defocus",
+      "parms": {
+        "focus": 6,
+        "maxblur": 6,
+        "range": 4
+      },
+      "type": "copdefocus",
+      "x": 100,
+      "y": 400
+    },
+    {
+      "inputs": ["defocus"],
+      "name": "glow",
+      "parms": {
+        "size": 40,
+        "threshold": 0.899999976
+      },
+      "type": "copglow",
+      "x": 100,
+      "y": 480
+    },
+    {
+      "inputs": ["glow"],
+      "name": "grade",
+      "parms": {
+        "contrast": 1.10000002,
+        "saturation": 1.14999998,
+        "tint": [1, 1, 0.949999988]
+      },
+      "type": "copcolor",
+      "x": 100,
+      "y": 560
+    },
+    {
+      "inputs": ["grade"],
+      "name": "lens",
+      "parms": {
+        "aberration": 1.5,
+        "grain": 0.0199999996
+      },
+      "type": "coplens",
+      "x": 100,
+      "y": 640
+    },
+    {
+      "inputs": ["lens"],
+      "name": "OUT",
+      "parms": {},
+      "type": "null",
+      "x": 100,
+      "y": 720
+    }
+  ],
+  "range": [1, 240],
+  "render": {
+    "bounces": 4,
+    "camera": [0.5, 0.800000012, -0.5, 15, 10, 6, 45],
+    "curveWidth": 0.0120000001,
+    "denoise": false,
+    "dof": false,
+    "exposure": 1,
+    "focusDist": 5,
+    "fstop": 4,
+    "ground": true,
+    "groundY": 0,
+    "height": 540,
+    "motionBlur": false,
+    "samples": 64,
+    "shutter": 0.5,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

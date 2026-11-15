@@ -3,7 +3,9 @@
 #include "core/GeoIO.h"
 #include "core/Lights.h"
 #include "core/Node.h"
+#include "core/Compositing.h"
 #include "core/PathTracer.h"
+#include "core/Usd.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -19,6 +21,10 @@ static void usage() {
         "  hdc render <scene.hdg> <out.png|out.exr> [--frame N | --frames A B] [--samples N] [--size W H] [--node NAME] [--camera NAME]\n"
         "             [--denoise | --no-denoise] [--motionblur]   (.exr writes RGBA plus albedo, N and Z passes)\n"
         "             path-trace the scene (a sequence writes out.0001.png, out.0002.png, ...)\n"
+        "  hdc usd    <scene.hdg> <out.usda> [--node NAME] [--frame N | --frames A B]\n"
+        "             export to USD (mesh, materials, cameras, lights; animated over a frame range)\n"
+        "  hdc image  <scene.hdg> <out.png|out.exr> [--node NAME] [--frame N | --frames A B]\n"
+        "             write the image a compositing node makes ($F in the name for sequences)\n"
         "  hdc demo   <name> <out.hdg>                   write a demo scene\n"
         "  hdc demos                                     list demo scenes\n"
         "  hdc nodes                                     list node types\n");
@@ -120,6 +126,62 @@ int main(int argc, char** argv) {
                 if (!pt.fetchBuffers(buf) || !writeExrPasses(path, buf, true, &err)) { std::printf("%s\n", err.c_str()); return 1; }
             } else if (!writePng(path, img, w, h, &err)) { std::printf("%s\n", err.c_str()); return 1; }
             std::printf("frame %d -> %s (%dx%d, %d samples, %.1fs)\n", f, path.c_str(), w, h, pt.samplesDone(), pt.secondsElapsed());
+        }
+        return 0;
+    }
+    if (cmd == "usd" && argc >= 4) {
+        Graph g;
+        std::string err;
+        if (!g.load(argv[2], &err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+        Node* target = g.displayNode();
+        if (const char* n = opt(argc, argv, "--node")) target = g.findNode(n);
+        if (!target) { std::printf("error: no node\n"); return 1; }
+        UsdExport ue;
+        ue.start = ue.end = int(g.frame);
+        if (const char* f = opt(argc, argv, "--frame")) ue.start = ue.end = std::atoi(f);
+        for (int i = 1; i + 2 < argc; ++i)
+            if (!std::strcmp(argv[i], "--frames")) { ue.start = std::atoi(argv[i + 1]); ue.end = std::atoi(argv[i + 2]); }
+        ue.fps = g.fps;
+        g.frame = float(ue.start);
+        ue.cameras = collectCameras(g, g.frame);
+        ue.lights = collectLights(g, g.frame);
+        bool ok = writeUsda(argv[3], ue, [&](float f, Geometry& out, std::string* e) {
+            g.frame = f;
+            g.cook(target);
+            if (!target->error().empty()) { if (e) *e = target->name() + ": " + target->error(); return false; }
+            out = target->geometry();
+            return true;
+        }, &err);
+        if (!ok) { std::printf("error: %s\n", err.c_str()); return 1; }
+        std::printf("%s frames %d-%d -> %s\n", target->name().c_str(), ue.start, ue.end, argv[3]);
+        return 0;
+    }
+    if (cmd == "image" && argc >= 4) {
+        // write the image a (compositing) node produces
+        Graph g;
+        std::string err;
+        if (!g.load(argv[2], &err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+        Node* target = g.displayNode();
+        if (const char* n = opt(argc, argv, "--node")) target = g.findNode(n);
+        if (!target) { std::printf("error: no node\n"); return 1; }
+        int a = int(g.frame), b = int(g.frame);
+        bool seq = false;
+        if (const char* f = opt(argc, argv, "--frame")) a = b = std::atoi(f);
+        for (int i = 1; i + 2 < argc; ++i)
+            if (!std::strcmp(argv[i], "--frames")) { a = std::atoi(argv[i + 1]); b = std::atoi(argv[i + 2]); seq = true; }
+        for (int f = a; f <= b; ++f) {
+            g.frame = float(f);
+            g.cook(target);
+            if (!target->error().empty()) { std::printf("cook error in %s: %s\n", target->name().c_str(), target->error().c_str()); return 1; }
+            if (target->geometry().images.empty()) { std::printf("error: %s has no image\n", target->name().c_str()); return 1; }
+            std::string path = argv[3];
+            if (seq && path.find("$F") == std::string::npos) {
+                char num[16]; std::snprintf(num, sizeof num, ".%04d", f);
+                size_t dot = path.rfind('.');
+                path.insert(dot == std::string::npos ? path.size() : dot, num);
+            }
+            if (!writeImageLayer(path, target->geometry().images[0], float(f), &err)) { std::printf("%s\n", err.c_str()); return 1; }
+            std::printf("frame %d -> %s (%d x %d)\n", f, expandFrame(path, float(f)).c_str(), target->geometry().images[0].w, target->geometry().images[0].h);
         }
         return 0;
     }

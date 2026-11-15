@@ -244,14 +244,16 @@ void App::drawMenuBar() {
         if (ImGui::MenuItem("Merge...")) openFileDialog(FileDialogMode::MergeScene);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add the nodes of another scene file to this one");
         if (ImGui::BeginMenu("Import")) {
-            if (ImGui::MenuItem("Geometry (.obj)...")) openFileDialog(FileDialogMode::ImportObj);
+            if (ImGui::MenuItem("Geometry (.obj / .usda)...")) openFileDialog(FileDialogMode::ImportObj);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Adds a File node. USD: meshes, points and curves from text .usda files");
             unavailable("Alembic Scene...");
             unavailable("Filmbox FBX...");
-            unavailable("USD...");
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Export")) {
             if (ImGui::MenuItem("Geometry (.obj / .ply)...", nullptr, false, net().displayNode() != nullptr)) openFileDialog(FileDialogMode::ExportObj);
+            if (ImGui::MenuItem("USD (.usda)...", nullptr, false, net().displayNode() != nullptr)) openFileDialog(FileDialogMode::ExportUsd);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("The displayed node with its materials, plus the scene's cameras and lights.\nAnimated nodes are written over the timeline range.");
             unavailable("Alembic Scene...");
             unavailable("Filmbox FBX...");
             ImGui::EndMenu();

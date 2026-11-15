@@ -25,6 +25,7 @@ struct RenderSettings {
     bool motionBlur = false;   // from the point velocity attribute v
     float shutter = 0.5f;      // frames, centred on the frame
     float fps = 24.f;          // set by the caller from the scene (not saved)
+    bool transparentBackground = false; // camera rays that miss show nothing (alpha = coverage); not saved
     // output
     bool denoise = false;      // edge-avoiding denoise of the final image (guided by albedo, normal, depth)
     // camera (orbit parameters, same as the viewport)

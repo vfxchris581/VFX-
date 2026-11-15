@@ -62,6 +62,17 @@ struct Volume {
     Vec3 bmax() const { return origin + Vec3(float(nx), float(ny), float(nz)) * dx; }
 };
 
+// A 2D image carried through the node graph (compositing). Pixels are linear RGBA with premultiplied
+// alpha, top row first. Data is shared, so copies are cheap.
+struct ImageLayer {
+    std::string name = "C";
+    int w = 0, h = 0;
+    std::shared_ptr<const std::vector<float>> rgba;  // w*h*4
+    std::shared_ptr<const std::vector<float>> depth; // optional, w*h (distance from the camera)
+    size_t pixels() const { return size_t(w) * size_t(h); }
+    bool valid() const { return w > 0 && h > 0 && rgba && rgba->size() == pixels() * 4; }
+};
+
 // Polygon soup geometry with named point & primitive attributes. "P" is stored separately.
 class Geometry {
 public:
@@ -71,9 +82,10 @@ public:
     std::map<std::string, Attrib> pointAttribs;
     std::map<std::string, Attrib> primAttribs;
     std::vector<Volume> volumes;
+    std::vector<ImageLayer> images;
 
     void clear();
-    bool empty() const { return P.empty() && volumes.empty(); }
+    bool empty() const { return P.empty() && volumes.empty() && images.empty(); }
     size_t numPoints() const { return P.size(); }
     size_t numPrims() const { return prims.size(); }
     size_t numVertices() const { return vertices.size(); }

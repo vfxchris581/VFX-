@@ -1,0 +1,49 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 1,
+  "nodes": [
+    {
+      "inputs": [],
+      "name": "mocap",
+      "parms": {
+        "file": "$HIP/assets/wave.bvh"
+      },
+      "type": "bvhimport",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": ["mocap"],
+      "name": "OUT",
+      "parms": {},
+      "type": "null",
+      "x": 0,
+      "y": 100
+    }
+  ],
+  "range": [1, 120],
+  "render": {
+    "bounces": 4,
+    "camera": [0, 1, 0, 20, 10, 5, 45],
+    "curveWidth": 0.0120000001,
+    "denoise": false,
+    "dof": false,
+    "exposure": 1,
+    "focusDist": 5,
+    "fstop": 4,
+    "ground": false,
+    "groundY": 0,
+    "height": 540,
+    "motionBlur": false,
+    "samples": 64,
+    "shutter": 0.5,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

@@ -7,6 +7,7 @@ void Geometry::clear() {
     P.clear(); vertices.clear(); prims.clear();
     pointAttribs.clear(); primAttribs.clear();
     volumes.clear();
+    images.clear();
 }
 
 int Geometry::addPoint(const Vec3& p) {
@@ -89,6 +90,7 @@ void Geometry::merge(const Geometry& o) {
         prims.push_back(pr);
     }
     volumes.insert(volumes.end(), o.volumes.begin(), o.volumes.end());
+    images.insert(images.end(), o.images.begin(), o.images.end());
 }
 
 void Geometry::transform(const Mat4& m) {

@@ -1,4 +1,5 @@
 #include "App.h"
+#include "core/Usd.h"
 #include "core/Demo.h"
 #include "core/GeoIO.h"
 #include "render/GL.h"
@@ -49,7 +50,7 @@ bool App::handleCloseRequest() {
 void App::openPath(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    if (ext == ".obj") {
+    if (ext == ".obj" || ext == ".usda") {
         checkpoint();
         Node* n = createNode("file", 0, 0);
         if (n) {
@@ -487,6 +488,9 @@ void App::openFileDialog(FileDialogMode mode) {
     } else if (mode == FileDialogMode::SaveImage || mode == FileDialogMode::SaveSequence) {
         std::string stem = currentFile_.empty() ? "render" : fs::path(currentFile_).stem().string();
         std::snprintf(fileName_, sizeof fileName_, "%s.png", stem.c_str());
+    } else if (mode == FileDialogMode::ExportUsd) {
+        std::string stem = currentFile_.empty() ? "scene" : fs::path(currentFile_).stem().string();
+        std::snprintf(fileName_, sizeof fileName_, "%s.usda", stem.c_str());
     } else if (mode == FileDialogMode::ExportObj) {
         std::snprintf(fileName_, sizeof fileName_, "%s.obj", net().displayNode() ? net().displayNode()->name().c_str() : "export");
     }
@@ -500,15 +504,17 @@ void App::drawFileDialog() {
     }
     ImGui::SetNextWindowSize(ImVec2(640, 460), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal("File Browser", nullptr)) return;
-    const char* titles[] = {"", "Open Scene", "Save Scene As", "Import OBJ", "Export Geometry (.obj / .ply)", "Choose File", "Save Rendered Image", "Render Sequence To (frame numbers are added)", "Merge Scene", "Install Asset"};
+    const char* titles[] = {"", "Open Scene", "Save Scene As", "Import OBJ", "Export Geometry (.obj / .ply)", "Choose File", "Save Rendered Image", "Render Sequence To (frame numbers are added)", "Merge Scene", "Install Asset", "Export USD"};
     ImGui::TextUnformatted(titles[int(fileMode_)]);
     ImGui::Separator();
-    bool saving = fileMode_ == FileDialogMode::SaveAs || fileMode_ == FileDialogMode::ExportObj || fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence;
+    bool saving = fileMode_ == FileDialogMode::SaveAs || fileMode_ == FileDialogMode::ExportObj || fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence || fileMode_ == FileDialogMode::ExportUsd;
     std::vector<std::string> exts;
     if (fileMode_ == FileDialogMode::Open || fileMode_ == FileDialogMode::SaveAs || fileMode_ == FileDialogMode::MergeScene) exts = {".hdg"};
     else if (fileMode_ == FileDialogMode::ExportObj) exts = {".obj", ".ply"};
     else if (fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence) exts = {".png", ".exr"};
     else if (fileMode_ == FileDialogMode::InstallAsset) exts = {".hda"};
+    else if (fileMode_ == FileDialogMode::ExportUsd) exts = {".usda"};
+    else if (fileMode_ == FileDialogMode::ImportObj) exts = {".obj", ".usda"};
     else if (fileMode_ == FileDialogMode::ChooseFileParm) {
         // image parameters (texture and environment maps) browse images; others browse geometry
         std::string pn = fileParmTarget.substr(fileParmTarget.find('/') + 1);
@@ -616,6 +622,32 @@ void App::drawFileDialog() {
             break;
         }
         case FileDialogMode::MergeScene: mergeScene(chosen); break;
+        case FileDialogMode::ExportUsd: {
+            Node* d = net().displayNode();
+            bool ok = false;
+            if (d) {
+                UsdExport ue;
+                const float keep = graph.frame;
+                bool animated = net().upstreamTimeDependent(d);
+                ue.start = animated ? graph.frameStart : int(graph.frame);
+                ue.end = animated ? graph.frameEnd : int(graph.frame);
+                ue.fps = graph.fps;
+                ue.cameras = collectCameras(graph, graph.frame);
+                ue.lights = collectLights(graph, graph.frame);
+                ok = writeUsda(chosen, ue, [&](float f, Geometry& out, std::string* e) {
+                    net().frame = f;
+                    net().cook(d);
+                    if (!d->error().empty()) { if (e) *e = d->name() + ": " + d->error(); return false; }
+                    out = d->geometry();
+                    return true;
+                }, &err);
+                net().frame = keep;
+                net().cook(d);
+                if (ok) { status("Exported " + chosen + (animated ? " (frames " + std::to_string(ue.start) + "-" + std::to_string(ue.end) + ")" : "")); break; }
+            }
+            status("USD export failed: " + err, true);
+            break;
+        }
         case FileDialogMode::InstallAsset: installAsset(chosen); break;
         case FileDialogMode::SaveImage: {
             bool ok;

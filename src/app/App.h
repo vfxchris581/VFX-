@@ -48,7 +48,7 @@ private:
     void drawNodeMenu(App& app);
 };
 
-enum class FileDialogMode { None, Open, SaveAs, ImportObj, ExportObj, ChooseFileParm, SaveImage, SaveSequence, MergeScene, InstallAsset };
+enum class FileDialogMode { None, Open, SaveAs, ImportObj, ExportObj, ChooseFileParm, SaveImage, SaveSequence, MergeScene, InstallAsset, ExportUsd };
 
 class App {
 public:
@@ -195,6 +195,9 @@ private:
 
     // render view
     PathTracer tracer_;
+    unsigned compTex_ = 0;       // image shown in the Scene View when the display node carries one
+    uint64_t compStamp_ = 0;
+    int compW_ = 0, compH_ = 0;
     unsigned renderTex_ = 0;
     int renderW_ = 0, renderH_ = 0;
     uint64_t renderVersion_ = 0;

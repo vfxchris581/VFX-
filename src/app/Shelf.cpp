@@ -256,6 +256,16 @@ void App::drawShelf() {
                                   {"Fluid Surface", "particlefluidsurface", "Mesh the selected fluid particles"},
                                   {"Ocean", "ocean", "Animated, wind-driven ocean surface"}};
     static const Tool vellum[] = {{"Vellum Solver", "vellumsolver", "Cloth, ropes, hair or soft bodies from the selected geometry"}};
+    static const Tool rigging[] = {{"Skeleton", "skeleton", "A joint chain, or bones from the selected curves"}, {"Joint Pose", "fkpose", "Rotate joints (FK)"},
+                                   {"IK Chain", "ikchain", "Reach a target with a joint chain"}, {"Capture", "capture", "Automatic skin weights (input 2: rest skeleton)"},
+                                   {"Bone Deform", "bonedeform", "Skin a captured mesh with a posed skeleton"}, {"Blend Shapes", "blendshapes", "Mix shape targets"},
+                                   {"Motion Capture", "bvhimport", "Load a BVH file"}, {"Retarget", "retarget", "Copy motion onto another skeleton"}};
+    static const Tool comp[] = {{"Render", "coprender", "Render the selected node into an image"}, {"Image File", "copfile", "Read PNG, EXR or HDR"},
+                                {"Constant", "copconstant", "Solid color, ramp or checker"}, {"Color Correct", "copcolor", "Grade the image"},
+                                {"Merge", "copmerge", "Over, add, multiply..."}, {"Z Comp", "copzcomp", "Depth composite"}, {"Key", "copkey", "Chroma key"},
+                                {"Roto", "copshape", "Mask from curves"}, {"Blur", "copblur", "Gaussian blur"}, {"Glow", "copglow", "Bloom"},
+                                {"Defocus", "copdefocus", "Depth of field from Z"}, {"Lens", "coplens", "Distortion, aberration, vignette, grain"},
+                                {"Write", "copwrite", "Save images"}};
     static const Tool pyro[] = {{"Pyro Solver", "pyrosolver", "Smoke / fire from the selected node"}, {"Fog Volume", "fogvolume", "Fill the selected mesh with fog"}};
 
     auto tools = [&](const Tool* list, size_t n) {
@@ -280,6 +290,8 @@ void App::drawShelf() {
         if (ImGui::BeginTabItem("Rigid Bodies")) { tools(destruction, std::size(destruction)); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Fluids")) { tools(fluids, std::size(fluids)); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Vellum")) { tools(vellum, std::size(vellum)); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Rigging")) { tools(rigging, std::size(rigging)); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Compositing")) { tools(comp, std::size(comp)); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
     ImGui::End();
