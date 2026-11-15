@@ -21,8 +21,33 @@
 #include <string>
 #include <vector>
 
+#include <csignal>
+#if defined(__has_include) && __has_include(<execinfo.h>) && __has_include(<unistd.h>)
+#include <execinfo.h>
+#include <unistd.h>
+#define HD_FUZZ_BACKTRACE 1
+#endif
+
 using namespace hd;
 using Bytes = std::vector<uint8_t>;
+
+// On a crash, print which target and input caused it (as hex, replayable with HD_FUZZ_REPLAY) and a stack trace.
+static const char* g_target = "";
+static const uint8_t* g_input = nullptr;
+static size_t g_inputSize = 0;
+static void crashHandler(int sig) {
+    std::fprintf(stderr, "\nfuzz: signal %d in target '%s', input (%zu bytes):\n", sig, g_target, g_inputSize);
+    for (size_t i = 0; i < g_inputSize && i < 4096; ++i) std::fprintf(stderr, "%02x", g_input[i]);
+    std::fprintf(stderr, "\n");
+#ifdef HD_FUZZ_BACKTRACE
+    void* frames[64];
+    int n = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, n, 2);
+#endif
+    std::fflush(stderr);
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
 
 struct Rng {
     uint64_t s;
@@ -81,6 +106,11 @@ static Bytes fromString(const std::string& s) { return Bytes(s.begin(), s.end())
 
 int main(int argc, char** argv) {
     const int iters = argc > 1 ? std::atoi(argv[1]) : 2000;
+#if !defined(__SANITIZE_ADDRESS__) // the sanitizers print their own, better report
+    for (int sig : {SIGSEGV, SIGABRT, SIGFPE, SIGILL}) std::signal(sig, crashHandler);
+#else
+    (void)crashHandler;
+#endif
     const uint64_t seed = argc > 2 ? uint64_t(std::atoll(argv[2])) : 1;
     // ---- seed inputs (valid files)
     {
@@ -137,8 +167,17 @@ int main(int argc, char** argv) {
     Rng rng(seed);
     long total = 0;
     auto run = [&](const char* name, const Bytes& seedBytes, const std::function<void(const Bytes&)>& fn) {
+        // HD_FUZZ_ONLY=<target> runs one target with the same inputs it gets in a full run
+        const char* only = std::getenv("HD_FUZZ_ONLY");
         for (int i = 0; i < iters; ++i) {
             Bytes b = i == 0 ? seedBytes : mutate(seedBytes, rng);
+            if (only && std::strcmp(only, name) != 0) { ++total; continue; }
+            // HD_FUZZ_REPLAY=<hex> runs that input instead (with HD_FUZZ_ONLY, to replay a reported crash)
+            if (const char* hex = std::getenv("HD_FUZZ_REPLAY")) {
+                b.clear();
+                for (size_t k = 0; hex[k] && hex[k + 1]; k += 2) { char two[3] = {hex[k], hex[k + 1], 0}; b.push_back(uint8_t(std::strtoul(two, nullptr, 16))); }
+            }
+            g_target = name; g_input = b.data(); g_inputSize = b.size();
             fn(b);
             ++total;
         }

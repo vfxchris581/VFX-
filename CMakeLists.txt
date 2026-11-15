@@ -90,6 +90,9 @@ if(HD_BUILD_TESTS)
   # mutation fuzzing of every parser (more iterations in the sanitizer CI job)
   add_executable(hd_fuzz tests/fuzz.cpp)
   target_link_libraries(hd_fuzz PRIVATE hd_core)
+  if(UNIX AND NOT APPLE)
+    target_link_options(hd_fuzz PRIVATE -rdynamic) # symbol names in the fuzzer's crash stack trace
+  endif()
   add_test(NAME hd_fuzz COMMAND hd_fuzz 300)
 endif()
 
