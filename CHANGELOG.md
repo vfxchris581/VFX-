@@ -3,17 +3,14 @@
 Version numbers follow the build phases. Each release lists what changed; STATUS.md lists
 what works, what is partial and what is planned.
 
-## Unreleased
+## 0.7.0
+
+Phase 8: installers and releases, plus new simulation and viewport features.
 
 - Whitewater Solver: spray, foam and bubbles from FLIP (trapped air, wave crests, kinetic energy), added to the dam-break example.
 - Viewport material preview: roughness, metal, emission, SSS and glass from Material nodes, plus base colour, roughness, metallic and normal maps (UDIM too). Toggle with "Mat" in the viewport toolbar or Display Options; textures that fail to load are listed in the viewport.
 - Vellum: optional point-triangle self collision (Self Collision (triangles) on the solver). A sheet dropped onto another now stacks on it instead of falling through between its points; contacts are inelastic.
 - Pyro: about 1.25x faster with bit-identical results (branch-free interior pressure solve).
-
-## 0.7.0
-
-Phase 8: installers and releases.
-
 - App icon (original artwork) for macOS, Windows, Linux and the window title bar.
 - Version shown in Help > About, `HD --version` and `hdc --version`, with the git commit.
 - macOS: `.hdg` files are registered to HD and open from Finder (double-click, Open With, drop on the Dock icon); OBJ, PLY, USDA and BVH can be opened with HD. Disk image is ad-hoc signed and contains first-launch instructions.

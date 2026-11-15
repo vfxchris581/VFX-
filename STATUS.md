@@ -115,7 +115,7 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | App smoke test | Working: `hd_ui_smoke` runs the real application headless (GLFW null platform + Mesa EGL), opens all 18 example scenes, plays frames, opens Render Settings, Render View and the comp viewer, stress-tests undo/redo, fails on any node error or OpenGL error, and saves screenshots (uploaded as a CI artifact) |
 | Benchmarks | Working: `hdc bench` times every major subsystem |
 | Performance | Improved, see below |
-| Viewport material preview | Working (after 0.7.0): the OpenGL viewport shades roughness, metal, specular, emission, SSS (wrap lighting) and glass (tint + reflections, no refraction) with GGX under a fixed studio rig, and shows base colour, roughness, metallic and normal maps including UDIM tiles (textures are cut to at most 2048 px). Scene lights are not used in the viewport, and overlapping glass is not depth-sorted. "Mat" in the viewport toolbar switches back to clay shading; missing maps are listed in the viewport |
+| Viewport material preview | Working: the OpenGL viewport shades roughness, metal, specular, emission, SSS (wrap lighting) and glass (tint + reflections, no refraction) with GGX under a fixed studio rig, and shows base colour, roughness, metallic and normal maps including UDIM tiles (textures are cut to at most 2048 px). Scene lights are not used in the viewport, and overlapping glass is not depth-sorted. "Mat" in the viewport toolbar switches back to clay shading; missing maps are listed in the viewport |
 | Memory-leak / long-session soak tests, GPU profiling | Planned |
 
 ### Measured speedups (`hdc bench`, same machine, before vs after Phase 7)
