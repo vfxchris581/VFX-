@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(HD VERSION 0.7.0 LANGUAGES C CXX)
+if(APPLE)
+  enable_language(OBJCXX) # src/app/MacOpenFiles.mm
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -152,7 +155,6 @@ if(HD_BUILD_APP)
     src/app/Theme.cpp
   )
   if(APPLE)
-    enable_language(OBJCXX)
     target_sources(hd_app PRIVATE src/app/MacOpenFiles.mm)
   endif()
   target_link_libraries(hd_app PUBLIC hd_render imgui glfw)
