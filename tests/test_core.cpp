@@ -2411,6 +2411,115 @@ TEST(example_files_cook_cleanly) {
 }
 #endif
 
+// ---------------------------------------------------------------- packed prims (phase 9)
+TEST(packed_prims) {
+    // spheres copied onto rotated, scaled, coloured points: packed vs real copies
+    auto build = [](Graph& g, bool pack) {
+        Node* sph = g.createNode("sphere");
+        sph->parm("rows")->val[0] = 10; sph->parm("cols")->val[0] = 16;
+        Node* grid = g.createNode("grid");
+        grid->parm("rows")->val[0] = 5; grid->parm("cols")->val[0] = 4;
+        grid->parm("sizex")->val[0] = 3; grid->parm("sizey")->val[0] = 2;
+        Node* w = g.createNode("attribwrangle");
+        w->parm("snippet")->str = "@pscale = 0.15 + 0.05 * (@ptnum % 3); @N = normalize(set(0.3, 1, 0.2 * @ptnum)); @Cd = set(@ptnum / 20.0, 0.5, 1 - @ptnum / 20.0);";
+        g.connect(grid, w, 0);
+        Node* cp = g.createNode("copytopoints");
+        g.connect(sph, cp, 0);
+        g.connect(w, cp, 1);
+        cp->parm("pack")->val[0] = pack ? 1.f : 0.f;
+        return cp;
+    };
+    Graph g1, g2;
+    Node* packedN = build(g1, true);
+    Node* realN = build(g2, false);
+    g1.cook(packedN); g2.cook(realN);
+    CHECK(packedN->error().empty() && realN->error().empty());
+    const Geometry& pk = packedN->geometry();
+    const Geometry& real = realN->geometry();
+    CHECK(pk.numPacked() == 20 && pk.numPoints() == 0);
+    CHECK(pk.packed.size() == 20 && pk.packed[0].geo == pk.packed[19].geo); // one shared prototype
+    size_t tp = 0, tq = 0;
+    pk.packedTotals(tp, tq);
+    CHECK(tp == real.numPoints() && tq == real.numPrims());
+    Vec3 a0, a1, b0, b1;
+    pk.bounds(a0, a1); real.bounds(b0, b1);
+    // packed bounds are the prototype's box moved by each transform: they contain the exact box and are a bit larger
+    CHECK(a0.x <= b0.x + 1e-4f && a0.y <= b0.y + 1e-4f && a0.z <= b0.z + 1e-4f && a1.x >= b1.x - 1e-4f && a1.y >= b1.y - 1e-4f && a1.z >= b1.z - 1e-4f);
+    CHECK(length(a1 - a0) < 1.3f * length(b1 - b0));
+    // unpacking gives the copies back, point for point
+    Geometry un = pk;
+    un.unpack();
+    CHECK(un.numPoints() == real.numPoints() && un.numPrims() == real.numPrims() && un.numPacked() == 0);
+    float worst = 0;
+    for (size_t i = 0; i < std::min(un.numPoints(), real.numPoints()); ++i) worst = std::max(worst, length(un.P[i] - real.P[i]));
+    CHECK(worst < 1e-4f);
+    CHECK(un.findAttrib(AttribClass::Prim, "Cd") || un.findAttrib(AttribClass::Point, "Cd"));
+    // the Unpack node does the same and tags pieces
+    Node* unp = g1.createNode("unpack");
+    g1.connect(packedN, unp, 0);
+    g1.cook(unp);
+    CHECK(unp->error().empty() && unp->geometry().numPrims() == real.numPrims() && unp->geometry().findAttrib(AttribClass::Prim, "piece"));
+    // transform, merge and nested packing carry packed prims along
+    Node* xf = g1.createNode("xform");
+    g1.connect(packedN, xf, 0);
+    xf->parm("t")->val[1] = 2;
+    g1.cook(xf);
+    Vec3 c0, c1;
+    xf->geometry().bounds(c0, c1);
+    CHECK(std::fabs(c0.y - (a0.y + 2)) < 1e-3f && xf->geometry().numPacked() == 20);
+    Node* mg = g1.createNode("merge");
+    g1.connect(packedN, mg, 0); g1.connect(xf, mg, 1);
+    g1.cook(mg);
+    CHECK(mg->geometry().numPacked() == 40);
+    Node* repack = g1.createNode("pack");
+    g1.connect(mg, repack, 0);
+    g1.cook(repack);
+    CHECK(repack->error().empty() && repack->geometry().numPacked() >= 40);
+    // Pack by piece: one packed prim per piece, pivot at each piece's centroid
+    {
+        Graph g;
+        Node* box = g.createNode("box");
+        Node* fr = g.createNode("voronoifracture");
+        g.connect(box, fr, 0);
+        Node* p = g.createNode("pack");
+        g.connect(fr, p, 0);
+        p->parm("pieceattrib")->str = "piece";
+        g.cook(p);
+        CHECK(p->error().empty());
+        const Attrib* pa = fr->geometry().findAttrib(AttribClass::Prim, "piece");
+        CHECK(pa != nullptr);
+        if (pa) {
+            std::set<int> ids;
+            for (size_t i = 0; i < fr->geometry().numPrims(); ++i) ids.insert(int(std::lround(pa->getF(i))));
+            CHECK(p->geometry().numPacked() == ids.size());
+        }
+        Geometry u = p->geometry();
+        u.unpack();
+        CHECK(u.numPrims() == fr->geometry().numPrims());
+    }
+    // rendering: instances look like the real copies (same geometry; only BVH and rounding differ)
+    RenderSettings rs;
+    rs.width = 64; rs.height = 48; rs.samples = 16; rs.camDist = 5; rs.denoise = false;
+    PathTracer::Buffers bp = renderBuffers(pk, rs, {});
+    PathTracer::Buffers br = renderBuffers(real, rs, {});
+    CHECK(bp.beauty.size() == br.beauty.size() && !bp.beauty.empty());
+    double diff = 0, sum = 0, cover = 0;
+    int normalOk = 0, normalN = 0;
+    for (size_t i = 0; i < std::min(bp.beauty.size(), br.beauty.size()); ++i) { diff += std::fabs(bp.beauty[i] - br.beauty[i]); sum += br.beauty[i]; }
+    for (size_t i = 0; i < std::min(bp.alpha.size(), br.alpha.size()); ++i) cover += std::fabs(bp.alpha[i] - br.alpha[i]);
+    for (size_t i = 0; i + 2 < std::min(bp.normal.size(), br.normal.size()); i += 3) {
+        Vec3 na(bp.normal[i], bp.normal[i + 1], bp.normal[i + 2]), nb(br.normal[i], br.normal[i + 1], br.normal[i + 2]);
+        if (dot(nb, nb) < 0.5f) continue;
+        ++normalN;
+        normalOk += dot(na, nb) > 0.98f;
+    }
+    const double rel = sum > 0 ? diff / sum : 1;
+    if (rel > 0.05 || cover > 3) std::printf("  packed render differs: rel %.4f, coverage %.1f px\n", rel, cover);
+    CHECK(rel < 0.05);          // Monte Carlo noise only
+    CHECK(cover <= 3);          // same silhouettes
+    CHECK(normalN > 100 && normalOk >= normalN * 97 / 100);
+}
+
 int main() {
     for (auto& t : tests()) {
         int before = g_failed;

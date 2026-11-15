@@ -73,6 +73,20 @@ struct ImageLayer {
     bool valid() const { return w > 0 && h > 0 && rgba && rgba->size() == pixels() * 4; }
 };
 
+class Geometry;
+
+// A packed primitive: an instance of shared, read-only geometry placed by a transform (Houdini's
+// packed primitives). Thousands of instances of one prototype cost one copy of its data; the
+// renderers draw them with instancing. Point/prim operations pass packed prims through untouched;
+// Unpack turns them into ordinary geometry.
+struct PackedPrim {
+    std::shared_ptr<const Geometry> geo; // prototype (may itself contain packed prims)
+    Mat4 xform;                          // prototype space -> this geometry's space
+    Vec3 color{1, 1, 1};
+    bool hasColor = false; // colours the prototype where it has no Cd of its own
+    int piece = -1;        // piece number (Pack by attribute) or copy number (Copy to Points)
+};
+
 // Polygon soup geometry with named point & primitive attributes. "P" is stored separately.
 class Geometry {
 public:
@@ -83,9 +97,16 @@ public:
     std::map<std::string, Attrib> primAttribs;
     std::vector<Volume> volumes;
     std::vector<ImageLayer> images;
+    std::vector<PackedPrim> packed;
 
     void clear();
-    bool empty() const { return P.empty() && volumes.empty() && images.empty(); }
+    bool empty() const { return P.empty() && volumes.empty() && images.empty() && packed.empty(); }
+    size_t numPacked() const { return packed.size(); }
+    // Expands every packed prim (recursively) into ordinary points and polygons, appended after the
+    // existing ones; instance colour becomes a prim Cd where the prototype has none.
+    void unpack();
+    // Number of triangles/points the packed prims stand for once expanded (for statistics).
+    void packedTotals(size_t& points, size_t& prims) const;
     size_t numPoints() const { return P.size(); }
     size_t numPrims() const { return prims.size(); }
     size_t numVertices() const { return vertices.size(); }

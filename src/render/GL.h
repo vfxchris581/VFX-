@@ -163,7 +163,10 @@ typedef std::ptrdiff_t GLintptr;
     X(void, glCullFace, (GLenum mode)) \
     X(void, glUniform2f, (GLint l, GLfloat x, GLfloat y)) \
     X(void, glUniform1iv, (GLint l, GLsizei n, const GLint* v)) \
-    X(void, glGenerateMipmap, (GLenum target))
+    X(void, glGenerateMipmap, (GLenum target)) \
+    X(void, glDrawArraysInstanced, (GLenum mode, GLint first, GLsizei count, GLsizei instances)) \
+    X(void, glVertexAttribDivisor, (GLuint index, GLuint divisor)) \
+    X(void, glVertexAttrib4f, (GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w))
 
 #define HD_GL_DECLARE(ret, name, args) typedef ret(HD_APIENTRY* PFN_hd_##name) args; extern PFN_hd_##name hd_##name;
 HD_GL_FUNCTIONS(HD_GL_DECLARE)
@@ -239,6 +242,9 @@ HD_GL_FUNCTIONS(HD_GL_DECLARE)
 #define glUniform2f hd_glUniform2f
 #define glUniform1iv hd_glUniform1iv
 #define glGenerateMipmap hd_glGenerateMipmap
+#define glDrawArraysInstanced hd_glDrawArraysInstanced
+#define glVertexAttribDivisor hd_glVertexAttribDivisor
+#define glVertexAttrib4f hd_glVertexAttrib4f
 
 namespace hd {
 using GLGetProc = void* (*)(const char*);

@@ -134,6 +134,32 @@ static int runBench(const std::string& examplesDir, bool quick) {
         char b[64]; std::snprintf(b, sizeof b, "%zu prims", m->geometry().numPrims());
         return b;
     });
+    timeIt("render 100k packed instances", [&]() -> std::string {
+        // 100k spheres of 4,900 polygons each share one prototype: about 490M polygons in total
+        Graph g;
+        Node* sp = g.createNode("sphere");
+        sp->parm("rows")->val[0] = 50; sp->parm("cols")->val[0] = 100;
+        Node* grid = g.createNode("grid");
+        grid->parm("rows")->val[0] = 316; grid->parm("cols")->val[0] = 316;
+        grid->parm("sizex")->val[0] = 60; grid->parm("sizey")->val[0] = 60;
+        Node* w = g.createNode("attribwrangle");
+        w->parm("snippet")->str = "@pscale = 0.06 + 0.06 * rand(@ptnum); @Cd = set(rand(@ptnum * 3), rand(@ptnum * 3 + 1), rand(@ptnum * 3 + 2));";
+        g.connect(grid, w, 0);
+        Node* cp = g.createNode("copytopoints");
+        g.connect(sp, cp, 0);
+        g.connect(w, cp, 1);
+        cp->parm("pack")->val[0] = 1;
+        g.cook(cp);
+        RenderSettings r;
+        r.width = 320; r.height = 180; r.samples = 8 * k; r.camDist = 14; r.camPitch = 25;
+        PathTracer pt;
+        pt.start(cp->geometry(), r);
+        pt.wait();
+        size_t tp = 0, tq = 0;
+        cp->geometry().packedTotals(tp, tq);
+        char b[96]; std::snprintf(b, sizeof b, "%zu instances, %zuM polygons", cp->geometry().numPacked(), tq / 1000000);
+        return b;
+    });
     timeIt("comp (render+grade)", [&]() -> std::string {
         Graph g; std::string err;
         g.load(examplesDir + "/comp.hdg", &err);
@@ -315,9 +341,10 @@ int main(int argc, char** argv) {
         if (cmd == "info") {
             for (auto& n : g.nodes()) g.cook(n.get());
             for (auto& n : g.nodes()) {
-                std::printf("%c %-18s %-15s %7zu pts %7zu prims %8.2f ms %s\n", n.get() == g.displayNode() ? '*' : ' ',
+                std::string extra = n->geometry().packed.empty() ? "" : " +" + std::to_string(n->geometry().numPacked()) + " packed";
+                std::printf("%c %-18s %-15s %7zu pts %7zu prims %8.2f ms%s %s\n", n.get() == g.displayNode() ? '*' : ' ',
                             n->name().c_str(), n->type().name.c_str(), n->geometry().numPoints(), n->geometry().numPrims(),
-                            n->cookTimeMs(), n->error().c_str());
+                            n->cookTimeMs(), extra.c_str(), n->error().c_str());
             }
             return 0;
         }
@@ -325,7 +352,8 @@ int main(int argc, char** argv) {
             g.cook(target);
             if (!target->error().empty()) { std::printf("cook error in %s: %s\n", target->name().c_str(), target->error().c_str()); return 1; }
             if (!exportGeo(argv[3], target->geometry(), err)) { std::printf("%s\n", err.c_str()); return 1; }
-            std::printf("%s: %zu points, %zu prims -> %s\n", target->name().c_str(), target->geometry().numPoints(), target->geometry().numPrims(), argv[3]);
+            std::printf("%s: %zu points, %zu prims%s -> %s\n", target->name().c_str(), target->geometry().numPoints(), target->geometry().numPrims(),
+                        target->geometry().packed.empty() ? "" : (", " + std::to_string(target->geometry().numPacked()) + " packed (unpacked on export)").c_str(), argv[3]);
             return 0;
         }
         if (cmd == "frames" && argc >= 6) {

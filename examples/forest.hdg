@@ -1,0 +1,169 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 1,
+  "nodes": [
+    {
+      "inputs": [],
+      "name": "ground",
+      "parms": {
+        "cols": 180,
+        "rows": 180,
+        "sizex": 90,
+        "sizey": 90
+      },
+      "type": "grid",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": ["ground"],
+      "name": "hills",
+      "parms": {
+        "elementsize": 25,
+        "height": 6
+      },
+      "type": "mountain",
+      "x": 0,
+      "y": 80
+    },
+    {
+      "inputs": ["hills"],
+      "name": "grass",
+      "parms": {
+        "color": [0.330000013, 0.419999987, 0.200000003]
+      },
+      "type": "color",
+      "x": 0,
+      "y": 160
+    },
+    {
+      "inputs": ["hills"],
+      "name": "tree_spots",
+      "parms": {
+        "npts": 12000,
+        "seed": 3
+      },
+      "type": "scatter",
+      "x": 220,
+      "y": 160
+    },
+    {
+      "inputs": ["tree_spots"],
+      "name": "vary",
+      "parms": {
+        "snippet": "// size, a random turn and a little lean per tree\n// (Copy to Points aims +Z along N and +Y along up)\n@pscale = 0.55 + 0.9 * rand(@ptnum * 7 + 1);\nfloat a = rand(@ptnum * 3 + 5) * 6.2832;\n@N = set(cos(a), 0, sin(a));\n@up = normalize(set(rand(@ptnum) - 0.5, 6, rand(@ptnum + 99) - 0.5));"
+      },
+      "type": "attribwrangle",
+      "x": 220,
+      "y": 240
+    },
+    {
+      "inputs": [],
+      "name": "trunk",
+      "parms": {
+        "cols": 8,
+        "height": 0.800000012,
+        "rad1": 0.0500000007,
+        "rad2": 0.0700000003,
+        "t": [0, 0.400000006, 0]
+      },
+      "type": "tube",
+      "x": 440,
+      "y": 0
+    },
+    {
+      "inputs": ["trunk"],
+      "name": "bark",
+      "parms": {
+        "color": [0.319999993, 0.200000003, 0.109999999]
+      },
+      "type": "color",
+      "x": 440,
+      "y": 80
+    },
+    {
+      "inputs": [],
+      "name": "crown",
+      "parms": {
+        "cols": 14,
+        "height": 1.79999995,
+        "rad1": 0,
+        "rad2": 0.550000012,
+        "rows": 4,
+        "t": [0, 1.45000005, 0]
+      },
+      "type": "tube",
+      "x": 620,
+      "y": 0
+    },
+    {
+      "inputs": ["crown"],
+      "name": "needles",
+      "parms": {
+        "color": [0.119999997, 0.300000012, 0.140000001]
+      },
+      "type": "color",
+      "x": 620,
+      "y": 80
+    },
+    {
+      "inputs": ["bark", "needles", null, null, null, null, null, null],
+      "name": "tree",
+      "parms": {},
+      "type": "merge",
+      "x": 530,
+      "y": 160
+    },
+    {
+      "inputs": ["tree", "vary"],
+      "name": "forest",
+      "parms": {
+        "pack": 1
+      },
+      "type": "copytopoints",
+      "x": 440,
+      "y": 320
+    },
+    {
+      "inputs": ["grass", "forest", null, null, null, null, null, null],
+      "name": "merge",
+      "parms": {},
+      "type": "merge",
+      "x": 220,
+      "y": 400
+    },
+    {
+      "inputs": ["merge"],
+      "name": "OUT",
+      "parms": {},
+      "type": "null",
+      "x": 220,
+      "y": 480
+    }
+  ],
+  "range": [1, 240],
+  "render": {
+    "bounces": 4,
+    "camera": [0, 2, 0, 30, 9, 28, 45],
+    "curveWidth": 0.0120000001,
+    "denoise": false,
+    "dof": false,
+    "exposure": 1,
+    "focusDist": 5,
+    "fstop": 4,
+    "ground": false,
+    "groundY": 0,
+    "height": 540,
+    "motionBlur": false,
+    "samples": 48,
+    "shutter": 0.5,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

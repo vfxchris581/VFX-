@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "App.h"
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -317,6 +318,19 @@ void App::drawParameters() {
         const Geometry& g = n->geometry();
         const bool imageOnly = !g.images.empty() && g.numPoints() == 0;
         if (!imageOnly) ImGui::Text("%zu points   %zu primitives   %zu vertices", g.numPoints(), g.numPrims(), g.numVertices());
+        if (!g.packed.empty()) {
+            size_t pp = 0, pq = 0;
+            g.packedTotals(pp, pq);
+            size_t protos = 0;
+            {
+                std::vector<const Geometry*> seen;
+                for (const PackedPrim& pk : g.packed)
+                    if (std::find(seen.begin(), seen.end(), pk.geo.get()) == seen.end() && seen.size() < 10000) seen.push_back(pk.geo.get());
+                protos = seen.size();
+            }
+            ImGui::Text("%zu packed prims  (%zu shared geometr%s)", g.numPacked(), protos, protos == 1 ? "y" : "ies");
+            ImGui::TextDisabled("Unpacked they would be %zu points, %zu primitives", pp, pq);
+        }
         for (auto& im : g.images) {
             if (!im.valid()) continue;
             // average colour, handy when grading

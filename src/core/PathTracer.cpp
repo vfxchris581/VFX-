@@ -13,6 +13,7 @@
 #include "Image.h"
 #include "Volume.h"
 #include <algorithm>
+#include <functional>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -60,6 +61,7 @@ struct Hit {
     float t = 1e30f;
     int prim = -1;
     float u = 0, v = 0;
+    int inst = -1; // packed-prim instance (prim is then in that instance's prototype)
 };
 
 struct Rng {
@@ -363,6 +365,21 @@ struct EnvMap {
 };
 
 struct Scene {
+    // Packed prims: each distinct prototype is a geometry-only Scene with its own BVH; instances
+    // point at one and carry a transform. A top-level BVH over the instances' world boxes is traced
+    // after the scene's own BVH, with the ray moved into the prototype's space.
+    struct Inst {
+        int proto = 0;
+        Mat4 xf, inv;
+        Vec3 color{1}; // linear
+        bool hasColor = false;
+    };
+    std::vector<std::unique_ptr<Scene>> protos;
+    std::vector<Inst> insts;
+    std::vector<BvhNode> instNodes;
+    std::vector<int> instOrder;
+    bool hasCd = false; // geometry carries Cd (instance colour only applies where it doesn't)
+
     std::vector<Tri> tris;
     std::vector<Sphere> spheres;
     std::vector<MatInst> mats;
@@ -458,7 +475,49 @@ struct Scene {
             }
         for (auto& v : g.volumes)
             if (v.density && v.density->size() == v.voxels() && v.voxels() > 0) vols.push_back(v);
+        addGeometry(g, s);
+        if (mats.empty()) mats.push_back(MatInst());
+        buildBvh();
+        // packed prims (nested ones flattened into world transforms)
+        std::unordered_map<const Geometry*, int> protoIndex;
+        size_t budget = 50u * 1000u * 1000u;
+        std::function<void(const Geometry&, const Mat4&, Vec3, bool)> collect = [&](const Geometry& gg, const Mat4& parent, Vec3 col, bool hasCol) {
+            for (const PackedPrim& pk : gg.packed) {
+                if (!pk.geo || !budget) continue;
+                const Mat4 M = parent * pk.xform;
+                const Vec3 c = pk.hasColor ? pk.color : col;
+                const bool hc = pk.hasColor || hasCol;
+                if (pk.geo->numPrims() || pk.geo->numPoints()) {
+                    auto it = protoIndex.find(pk.geo.get());
+                    int pi;
+                    if (it == protoIndex.end()) {
+                        auto pr = std::make_unique<Scene>();
+                        pr->set = set;
+                        pr->addGeometry(*pk.geo, s);
+                        if (pr->mats.empty()) pr->mats.push_back(MatInst());
+                        pr->buildBvh();
+                        warnings += pr->warnings;
+                        pi = int(protos.size());
+                        protos.push_back(std::move(pr));
+                        protoIndex[pk.geo.get()] = pi;
+                    } else pi = it->second;
+                    if (std::fabs(M.det3()) > 1e-30f) {
+                        Inst in;
+                        in.proto = pi; in.xf = M; in.inv = M.inverseAffine();
+                        in.color = toLinear(c); in.hasColor = hc;
+                        insts.push_back(in);
+                        --budget;
+                    }
+                }
+                if (!pk.geo->packed.empty()) collect(*pk.geo, M, c, hc);
+            }
+        };
+        collect(g, Mat4(), Vec3(1), false);
+        if (!budget) warnings += "More than 50M packed instances: the rest are not rendered.\n";
+        buildInstBvh();
+    }
 
+    void addGeometry(const Geometry& g, const RenderSettings& s) {
         const Attrib* pN = g.findAttrib(AttribClass::Point, "N");
         const Attrib* qN = g.findAttrib(AttribClass::Prim, "N");
         const Attrib* pCd = g.findAttrib(AttribClass::Point, "Cd");
@@ -517,6 +576,7 @@ struct Scene {
             return int(mats.size()) - 1;
         };
         const bool anyColor = pCd || qCd;
+        hasCd = anyColor;
         auto uvOf = [&](int pt) { return pUv ? pUv->getV(size_t(pt)) : Vec3(0); };
         auto motionOf = [&](int pt) { return pV ? pV->getV(size_t(pt)) * shutterScale : Vec3(0); };
         std::vector<char> used(g.numPoints(), 0);
@@ -580,8 +640,98 @@ struct Scene {
             if (pV) { sp.motion = motionOf(int(i)); sp.moving = dot(sp.motion, sp.motion) > 1e-14f; }
             spheres.push_back(sp);
         }
-        if (mats.empty()) mats.push_back(MatInst());
-        buildBvh();
+    }
+
+    // Top-level BVH over instance boxes (prototype box corners moved to world space). Median splits
+    // on the widest axis: instance counts are modest next to triangle counts.
+    void buildInstBvh() {
+        const size_t n = insts.size();
+        instNodes.clear();
+        instOrder.resize(n);
+        if (!n) return;
+        std::vector<Vec3> bmn(n), bmx(n), cen(n);
+        for (size_t i = 0; i < n; ++i) {
+            instOrder[i] = int(i);
+            const Scene& pr = *protos[size_t(insts[i].proto)];
+            Vec3 a(1e30f), b(-1e30f);
+            if (!pr.nodes.empty()) {
+                const Vec3 lo = pr.nodes[0].mn, hi = pr.nodes[0].mx;
+                for (int k = 0; k < 8; ++k) {
+                    Vec3 c((k & 1) ? hi.x : lo.x, (k & 2) ? hi.y : lo.y, (k & 4) ? hi.z : lo.z);
+                    Vec3 w = insts[i].xf.transformPoint(c);
+                    a = vmin(a, w); b = vmax(b, w);
+                }
+            } else a = b = insts[i].xf.transformPoint(Vec3(0));
+            bmn[i] = a; bmx[i] = b; cen[i] = (a + b) * 0.5f;
+        }
+        instNodes.reserve(2 * n);
+        struct Job { int node, lo, hi; };
+        std::vector<Job> stack{{0, 0, int(n)}};
+        instNodes.push_back(BvhNode());
+        while (!stack.empty()) {
+            Job j = stack.back(); stack.pop_back();
+            Vec3 mn(1e30f), mx(-1e30f), cmn(1e30f), cmx(-1e30f);
+            for (int i = j.lo; i < j.hi; ++i) {
+                size_t id = size_t(instOrder[size_t(i)]);
+                mn = vmin(mn, bmn[id]); mx = vmax(mx, bmx[id]);
+                cmn = vmin(cmn, cen[id]); cmx = vmax(cmx, cen[id]);
+            }
+            instNodes[size_t(j.node)].mn = mn; instNodes[size_t(j.node)].mx = mx;
+            Vec3 ext = cmx - cmn;
+            int axis = ext.x > ext.y ? (ext.x > ext.z ? 0 : 2) : (ext.y > ext.z ? 1 : 2);
+            if (j.hi - j.lo <= 2 || ext[axis] < 1e-12f) {
+                instNodes[size_t(j.node)].first = j.lo;
+                instNodes[size_t(j.node)].count = j.hi - j.lo;
+                continue;
+            }
+            int mid = (j.lo + j.hi) / 2;
+            std::nth_element(instOrder.begin() + j.lo, instOrder.begin() + mid, instOrder.begin() + j.hi,
+                             [&](int a, int b) { return cen[size_t(a)][axis] < cen[size_t(b)][axis]; });
+            int l = int(instNodes.size());
+            instNodes.push_back(BvhNode());
+            instNodes.push_back(BvhNode());
+            instNodes[size_t(j.node)].left = l;
+            instNodes[size_t(j.node)].right = l + 1;
+            stack.push_back({l, j.lo, mid});
+            stack.push_back({l + 1, mid, j.hi});
+        }
+    }
+
+    const Scene& sceneOf(const Hit& h) const { return h.inst >= 0 ? *protos[size_t(insts[size_t(h.inst)].proto)] : *this; }
+    Ray localRay(const Ray& r, const Inst& in) const { return Ray{in.inv.transformPoint(r.o), in.inv.transformDir(r.d), r.time}; }
+    int primMat(int prim) const { return prim < int(tris.size()) ? tris[size_t(prim)].mat : spheres[size_t(prim) - tris.size()].mat; }
+    Vec3 primColor(const Hit& h) const {
+        if (h.prim < int(tris.size())) {
+            const Tri& t = tris[size_t(h.prim)];
+            float w = 1 - h.u - h.v;
+            return t.c0 * w + t.c1 * h.u + t.c2 * h.v;
+        }
+        return spheres[size_t(h.prim) - tris.size()].col;
+    }
+    // Colour of an instance hit: the instance colour replaces the prototype's default colour.
+    Vec3 instanceTint(const Hit& h, const Vec3& protoColor, bool textured) const {
+        if (h.inst < 0) return protoColor;
+        const Inst& in = insts[size_t(h.inst)];
+        const Scene& pr = *protos[size_t(in.proto)];
+        if (!in.hasColor || pr.hasCd) return protoColor;
+        static const Vec3 defCol = toLinear(Vec3(0.72f, 0.74f, 0.78f));
+        return textured ? protoColor * in.color : in.color * (protoColor / vmax(defCol, Vec3(1e-6f)));
+    }
+    // Geometric normal (not oriented) of a hit, in world space.
+    Vec3 hitGeomNormal(const Hit& h, const Ray& worldRay, const Vec3& worldP) const {
+        const Scene& sc = sceneOf(h);
+        const Inst* in = h.inst >= 0 ? &insts[size_t(h.inst)] : nullptr;
+        Vec3 ng;
+        if (h.prim < int(sc.tris.size())) {
+            Vec3 p0, e1, e2;
+            sc.triAt(sc.tris[size_t(h.prim)], worldRay.time, p0, e1, e2);
+            ng = cross(e1, e2);
+        } else {
+            const Sphere& sp = sc.spheres[size_t(h.prim) - sc.tris.size()];
+            Vec3 lp = in ? in->inv.transformPoint(worldP) : worldP;
+            ng = lp - (sp.moving ? sp.c + sp.motion * worldRay.time : sp.c);
+        }
+        return in ? in->xf.transformNormal(ng) : normalize(ng);
     }
 
     void primBounds(int id, Vec3& mn, Vec3& mx) const {
@@ -756,6 +906,50 @@ struct Scene {
     }
 
     bool intersect(const Ray& r, Hit& h, bool any) const {
+        bool found = intersectOwn(r, h, any);
+        if (found && any) return true;
+        if (instNodes.empty()) return found;
+        Vec3 inv(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
+        int stack[64];
+        int sp = 0;
+        if (!slab(instNodes[0].mn, instNodes[0].mx, r, inv, h.t)) return found;
+        stack[sp++] = 0;
+        while (sp) {
+            const BvhNode& n = instNodes[size_t(stack[--sp])];
+            if (n.count) {
+                for (int i = 0; i < n.count; ++i) {
+                    const int ii = instOrder[size_t(n.first + i)];
+                    const Inst& in = insts[size_t(ii)];
+                    // same t along the ray in both spaces: the direction is transformed, not normalised
+                    Hit lh;
+                    lh.t = h.t;
+                    if (protos[size_t(in.proto)]->intersectOwn(localRay(r, in), lh, any)) {
+                        h = lh;
+                        h.inst = ii;
+                        found = true;
+                        if (any) return true;
+                    }
+                }
+                continue;
+            }
+            float tl = 0, tr = 0;
+            bool hl = slab(instNodes[size_t(n.left)].mn, instNodes[size_t(n.left)].mx, r, inv, h.t, &tl);
+            bool hr = slab(instNodes[size_t(n.right)].mn, instNodes[size_t(n.right)].mx, r, inv, h.t, &tr);
+            if (sp > 60) {
+                if (hl) stack[sp++] = n.left;
+                else if (hr) stack[sp++] = n.right;
+                continue;
+            }
+            if (hl && hr) {
+                if (tl <= tr) { stack[sp++] = n.right; stack[sp++] = n.left; }
+                else { stack[sp++] = n.left; stack[sp++] = n.right; }
+            } else if (hl) stack[sp++] = n.left;
+            else if (hr) stack[sp++] = n.right;
+        }
+        return found;
+    }
+
+    bool intersectOwn(const Ray& r, Hit& h, bool any) const {
         if (nodes.empty()) return false;
         Vec3 inv(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
         int stack[64];
@@ -945,6 +1139,19 @@ struct Scene {
     };
 
     void shade(const Ray& ray, const Hit& h, bool groundHit, SurfacePt& s) const {
+        if (!groundHit && h.inst >= 0) {
+            const Inst& in = insts[size_t(h.inst)];
+            Hit lh = h;
+            lh.inst = -1;
+            protos[size_t(in.proto)]->shade(localRay(ray, in), lh, false, s);
+            s.pos = ray.o + ray.d * h.t;
+            s.n = in.xf.transformNormal(s.n);
+            s.ng = in.xf.transformNormal(s.ng);
+            if (dot(s.ng, ray.d) > 0) s.ng = -s.ng; // keep both on the incoming side (sign is invariant; guards rounding)
+            if (dot(s.n, ray.d) > 0) s.n = s.ng;
+            s.base = instanceTint(h, s.base, s.m && s.m->texBase > 0);
+            return;
+        }
         s.pos = ray.o + ray.d * h.t;
         static const MatInst groundMat = [] { MatInst m; m.rough = 0.9f; return m; }();
         if (groundHit) {
@@ -1009,6 +1216,7 @@ struct Scene {
 
     bool anyTransmissive() const {
         for (auto& m : mats) if (m.transmit > 0 && m.metal < 1) return true;
+        for (auto& pr : protos) if (pr->anyTransmissive()) return true;
         return false;
     }
     bool hasGlass = false;
@@ -1028,16 +1236,11 @@ struct Scene {
                 Hit sh;
                 sh.t = left;
                 if (!intersect(sr, sh, false)) break;
-                int mat = sh.prim < int(tris.size()) ? tris[size_t(sh.prim)].mat : spheres[size_t(sh.prim) - tris.size()].mat;
-                const MatInst& m = mats[size_t(mat)];
+                const Scene& sc = sceneOf(sh);
+                const MatInst& m = sc.mats[size_t(sc.primMat(sh.prim))];
                 float tr = m.transmit * (1 - m.metal);
                 if (tr <= 0) return Vec3(0);
-                Vec3 tint(1);
-                if (sh.prim < int(tris.size())) {
-                    const Tri& t = tris[size_t(sh.prim)];
-                    float w = 1 - sh.u - sh.v;
-                    tint = t.c0 * w + t.c1 * sh.u + t.c2 * sh.v;
-                } else tint = spheres[size_t(sh.prim) - tris.size()].col;
+                Vec3 tint = instanceTint(sh, sc.primColor(sh), m.texBase > 0);
                 T = T * tint * tr;
                 if (maxc(T) < 1e-3f) return Vec3(0);
                 o = o + d * (sh.t + 1e-4f);
@@ -1076,15 +1279,7 @@ struct Scene {
                 if (pdf <= 0) return false;
                 thr = thr * Tk / pdf;
                 exitP = p + dir * h.t;
-                Vec3 ng;
-                if (h.prim < int(tris.size())) {
-                    Vec3 p0, e1, e2;
-                    triAt(tris[size_t(h.prim)], inRay.time, p0, e1, e2);
-                    ng = normalize(cross(e1, e2));
-                } else {
-                    const Sphere& sp = spheres[size_t(h.prim) - tris.size()];
-                    ng = normalize(exitP - (sp.moving ? sp.c + sp.motion * inRay.time : sp.c));
-                }
+                Vec3 ng = hitGeomNormal(h, inRay, exitP);
                 exitN = dot(ng, dir) > 0 ? ng : -ng; // outward
                 return true;
             }

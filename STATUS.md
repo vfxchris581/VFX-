@@ -32,7 +32,7 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Fracturing | Working | **Voronoi Fracture**. See Phase 3 |
 | Booleans, remeshing, retopology, UV tools, sculpting, NURBS, procedural architecture, terrain heightfields | Planned | |
 | VDB workflows | Planned | Volumes are dense grids, not OpenVDB |
-| Packed primitives / instancing | Planned | Copy to Points makes real copies |
+| Packed primitives / instancing | Working | See Phase 9 below |
 
 ## Phase 3: pyro, particles, destruction
 
@@ -141,3 +141,17 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | GitHub Releases | Working: pushing a tag `vX.Y.Z` (must match the CMake version) runs every job and, if all pass, publishes one release with the four packages, `SHA256SUMS.txt` and notes from CHANGELOG.md |
 | Code signing / notarization | Not done: needs the owner's Apple Developer ID certificate and a Windows code-signing certificate (paid, issued to a person or company). Until then macOS asks once on first launch and Windows SmartScreen may warn |
 | Auto-update, AppImage/Flatpak, Linux ARM, Windows ARM | Planned |
+
+## Phase 9: packed primitives and instancing
+
+| Item | Status |
+|---|---|
+| Packed prims | Working: geometry can hold packed primitives, each a transform plus shared, read-only geometry (nested packing allowed). Transform, Merge and other nodes that pass geometry through keep them; bounds, Node Info and `hdc info` count them |
+| Pack / Unpack nodes | Working: Pack makes one packed prim of the input, or one per piece (any prim attribute such as `piece`), with the pivot at each piece's centroid or the origin. Unpack expands them back into points and polygons and can tag each piece. Tested: unpacking gives the same points as real copies |
+| Copy to Points: Pack and Instance | Working: one packed prim per target point sharing a single copy of the source; N/up/pscale/scale/Cd are honoured; instance Cd colours the copy where it has no Cd of its own |
+| Path tracer | Working: a two-level BVH (one per distinct prototype, plus one over instances). Materials, textures, glass, SSS and AOVs work on instances. Tested: packed and real copies render the same within noise. 100,000 instances of a 4,900-polygon sphere (about 490M polygons) render at 320x180 x 8 samples in about 2 s using about 70 MB in total |
+| Viewport | Working: each prototype is uploaded once and drawn with GPU instancing (per-instance transform and colour), in both clay and material shading. The forest example draws 12,000 trees (1.7M triangles) |
+| Export | Working: OBJ, PLY and USD exports unpack packed prims (written as plain meshes) |
+| Example | `examples/forest.hdg`: 12,000 trees scattered on terrain, packed |
+| Limits | Not done: instances have no motion blur in renders; curves and loose points inside a prototype aren't drawn in the viewport (polygons are); no wireframe or point display for instances; VEX and most point/prim nodes don't see inside packed prims (unpack first); RBD doesn't simulate packed pieces yet; USD export doesn't write point instancers |
+

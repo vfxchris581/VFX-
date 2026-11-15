@@ -737,7 +737,10 @@ std::vector<NodeType> buildTypes() {
         t.description = "Copies the first input onto every point of the second input (uses N, up, pscale, scale, Cd).";
         t.minInputs = 2; t.maxInputs = 2;
         t.inputLabels = {"Geometry to copy", "Target points"};
-        t.parms = {T("useN", "Orient to N", true), T("usepscale", "Use pscale", true), T("useCd", "Transfer Cd", true), F("scale", "Uniform Scale", 1, 0, 3)};
+        t.parms = {T("useN", "Orient to N", true), T("usepscale", "Use pscale", true), T("useCd", "Transfer Cd", true), F("scale", "Uniform Scale", 1, 0, 3),
+                   T("pack", "Pack and Instance", false,
+                     "Output one packed prim per point that shares the source geometry instead of real copies: "
+                     "fast and light for thousands or millions of copies. Use Unpack to edit them.")};
         t.cook = [](CookContext& c) {
             const Geometry& src = c.input(0);
             const Geometry& pts = c.input(1);
@@ -747,6 +750,24 @@ std::vector<NodeType> buildTypes() {
             const Attrib* sc = pts.findAttrib(AttribClass::Point, "scale");
             const Attrib* Cd = c.b("useCd") ? pts.findAttrib(AttribClass::Point, "Cd") : nullptr;
             float us = c.f("scale");
+            if (c.b("pack")) {
+                auto proto = std::make_shared<const Geometry>(src);
+                Geometry& g = c.out;
+                g.packed.reserve(pts.numPoints());
+                for (size_t i = 0; i < pts.numPoints(); ++i) {
+                    Vec3 s(us);
+                    if (ps) s = s * ps->getF(i);
+                    if (sc) s = s * sc->getV(i);
+                    Mat4 R = N ? Mat4::lookAlong(N->getV(i), up ? up->getV(i) : Vec3(0, 1, 0)) : Mat4();
+                    PackedPrim pk;
+                    pk.geo = proto;
+                    pk.xform = Mat4::translate(pts.P[i]) * R * Mat4::scale(s);
+                    pk.piece = int(i);
+                    if (Cd) { pk.color = Cd->getV(i); pk.hasColor = true; }
+                    g.packed.push_back(pk);
+                }
+                return;
+            }
             if (src.numPoints() * pts.numPoints() > 50000000) { c.error("Too many copies (over 50M points)."); return; }
             Geometry& g = c.out;
             g.P.reserve(src.numPoints() * pts.numPoints());
@@ -765,6 +786,74 @@ std::vector<NodeType> buildTypes() {
                 Attrib& cn = copy.addAttrib(AttribClass::Prim, "copynum", 1);
                 for (size_t k = 0; k < copy.numPrims(); ++k) cn.setF(k, float(i));
                 g.merge(copy);
+            }
+        };
+        add(t);
+    }
+    {
+        NodeType t; t.name = "pack"; t.label = "Pack"; t.category = "Points";
+        t.description = "Packs geometry into packed primitives (shared, transformable instances): the whole input, or one per piece.";
+        t.minInputs = 1; t.maxInputs = 1;
+        t.parms = {S("pieceattrib", "Piece Attribute", "",
+                     "Prim attribute that numbers the pieces (for example 'piece' from Voronoi Fracture or 'copynum'). Empty: pack everything into one."),
+                   M("pivot", "Pivot", {"Centroid", "Origin"}, 0)};
+        t.cook = [](CookContext& c) {
+            const Geometry& in = c.input(0);
+            Geometry& g = c.out;
+            const std::string an = c.s("pieceattrib");
+            const bool centroid = c.i("pivot") == 0;
+            auto packOne = [&](Geometry part, int piece) {
+                Vec3 pivot(0);
+                if (centroid && part.numPoints()) {
+                    for (const Vec3& p : part.P) pivot += p;
+                    pivot = pivot / float(part.numPoints());
+                    part.transform(Mat4::translate(-pivot));
+                }
+                PackedPrim pk;
+                pk.geo = std::make_shared<const Geometry>(std::move(part));
+                pk.xform = Mat4::translate(pivot);
+                pk.piece = piece;
+                g.packed.push_back(pk);
+            };
+            if (an.empty()) {
+                Geometry whole = in;
+                whole.packed.clear();
+                packOne(std::move(whole), 0);
+                g.packed.insert(g.packed.end(), in.packed.begin(), in.packed.end()); // packed input stays packed
+                return;
+            }
+            const Attrib* a = in.findAttrib(AttribClass::Prim, an);
+            if (!a) { c.error("No prim attribute '" + an + "'."); return; }
+            std::map<int, std::vector<int>> pieces;
+            for (size_t i = 0; i < in.numPrims(); ++i) pieces[int(std::lround(a->getF(i)))].push_back(int(i));
+            for (auto& [id, prims] : pieces) packOne(in.extractPrims(prims), id);
+            g.packed.insert(g.packed.end(), in.packed.begin(), in.packed.end());
+        };
+        add(t);
+    }
+    {
+        NodeType t; t.name = "unpack"; t.label = "Unpack"; t.category = "Points";
+        t.description = "Turns packed primitives into ordinary, editable points and polygons.";
+        t.minInputs = 1; t.maxInputs = 1;
+        t.parms = {T("piece", "Add piece Attribute", true, "Write each instance's piece/copy number to a 'piece' prim attribute")};
+        t.cook = [](CookContext& c) {
+            const Geometry& in = c.input(0);
+            Geometry& g = c.out;
+            g = in;
+            g.packed.clear();
+            size_t pts = 0, prims = 0;
+            in.packedTotals(pts, prims);
+            if (pts > 50000000) { c.error("Unpacking would make over 50M points."); return; }
+            const bool tag = c.b("piece");
+            for (const PackedPrim& pk : in.packed) {
+                Geometry one;
+                one.packed.push_back(pk);
+                one.unpack();
+                if (tag) {
+                    Attrib& pa = one.addAttrib(AttribClass::Prim, "piece", 1);
+                    for (size_t k = 0; k < one.numPrims(); ++k) pa.setF(k, float(pk.piece));
+                }
+                g.merge(one);
             }
         };
         add(t);

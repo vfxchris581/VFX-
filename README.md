@@ -15,7 +15,7 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
   - Generators: Box, Sphere, Grid, Tube, Torus, Circle, Line, File (OBJ)
   - Modifiers: Transform, Merge, Subdivide (Catmull-Clark), PolyExtrude, Fuse, Facet, Reverse, Blast, PolyWire
   - Deformers: Mountain (fractal noise), Smooth, Peak, Point Jitter
-  - Points: Scatter (area weighted), Copy to Points (orients to `N`/`up`, scales by `pscale`/`scale`, transfers `Cd`)
+  - Points: Scatter (area weighted), Copy to Points (orients to `N`/`up`, scales by `pscale`/`scale`, transfers `Cd`, optional Pack and Instance), Pack, Unpack
   - Attributes: Attribute Wrangle, Attribute Create, Color, Normal, Material, UV Project
   - Utility: Null, Switch, Subnetwork, Subnet Input, Output, Time Shift
   - Lights and Cameras: Camera, Point Light, Spot Light, Area Light, Distant Light, Environment Light
@@ -212,7 +212,7 @@ A node recooks only when its parameters, inputs or bypass state change, or when 
 
 1. ~~Particles / POP solver~~ — done. Next for particles: collisions against arbitrary meshes, particle-to-particle forces.
 2. ~~Smoke and fire~~ — done (dense grids). Next for volumes: sparse grids, volume wrangle, convert volumes to and from meshes.
-3. Packed primitives and instancing, plus a GPU path for heavy copies.
+3. ~~Packed primitives and instancing~~ — done (Phase 9): Pack/Unpack, instanced Copy to Points, two-level BVH in the path tracer, GPU instancing in the viewport. Next: packed RBD pieces, USD point instancers, instance motion blur.
 6. ~~Fracturing and rigid bodies~~ — done. Next: constraints (hinge, spring, cone twist), concave collision via convex decomposition, debris particles from breaking pieces.
 7. ~~FLIP fluids, ocean and Vellum~~ — done. Whitewater (spray/foam/bubbles) is done too. Next: surface tension, sparse/narrow-band FLIP, Vellum edge-edge collision (point-triangle is done), grains and tetrahedral soft bodies.
 8. ~~USD, rigging and animation, compositing~~ — done. Next: USD references/variants and a LOP network, crowds, camera tracking, a dedicated image viewer with channels.

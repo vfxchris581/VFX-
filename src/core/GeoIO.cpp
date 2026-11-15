@@ -61,7 +61,11 @@ bool loadObj(const std::string& path, Geometry& out, std::string* error) {
     return true;
 }
 
-bool saveObj(const std::string& path, const Geometry& geo, std::string* error) {
+bool saveObj(const std::string& path, const Geometry& geoIn, std::string* error) {
+    // packed prims are expanded on the way out
+    Geometry unpacked;
+    if (!geoIn.packed.empty()) { unpacked = geoIn; unpacked.unpack(); }
+    const Geometry& geo = geoIn.packed.empty() ? geoIn : unpacked;
     std::ofstream f(path);
     if (!f) { if (error) *error = "cannot write '" + path + "'"; return false; }
     f << "# Exported from HD\n";
@@ -91,7 +95,10 @@ bool saveObj(const std::string& path, const Geometry& geo, std::string* error) {
     return bool(f);
 }
 
-bool savePly(const std::string& path, const Geometry& geo, std::string* error) {
+bool savePly(const std::string& path, const Geometry& geoIn, std::string* error) {
+    Geometry unpacked;
+    if (!geoIn.packed.empty()) { unpacked = geoIn; unpacked.unpack(); }
+    const Geometry& geo = geoIn.packed.empty() ? geoIn : unpacked;
     std::ofstream f(path);
     if (!f) { if (error) *error = "cannot write '" + path + "'"; return false; }
     const Attrib* Cd = geo.findAttrib(AttribClass::Point, "Cd");

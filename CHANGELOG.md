@@ -3,6 +3,15 @@
 Version numbers follow the build phases. Each release lists what changed; STATUS.md lists
 what works, what is partial and what is planned.
 
+## Unreleased
+
+Phase 9: packed primitives and instancing.
+
+- Packed primitives: shared, transformable instances of geometry (nested packing allowed). Pack (whole input or one per piece) and Unpack nodes; Copy to Points has a "Pack and Instance" option.
+- Path tracer renders instances with a two-level BVH: 100,000 instances of a 4,900-polygon sphere (about 490M polygons) in about 2 s and about 70 MB.
+- Viewport draws instances with GPU instancing in clay and material shading.
+- OBJ, PLY and USD exports unpack instances. New example: `forest.hdg` (12,000 trees). New bench workload.
+
 ## 0.7.0
 
 Phase 8: installers and releases, plus new simulation and viewport features.

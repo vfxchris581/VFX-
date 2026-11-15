@@ -8,6 +8,7 @@ void Geometry::clear() {
     pointAttribs.clear(); primAttribs.clear();
     volumes.clear();
     images.clear();
+    packed.clear();
 }
 
 int Geometry::addPoint(const Vec3& p) {
@@ -91,10 +92,12 @@ void Geometry::merge(const Geometry& o) {
     }
     volumes.insert(volumes.end(), o.volumes.begin(), o.volumes.end());
     images.insert(images.end(), o.images.begin(), o.images.end());
+    packed.insert(packed.end(), o.packed.begin(), o.packed.end());
 }
 
 void Geometry::transform(const Mat4& m) {
     for (auto& p : P) p = m.transformPoint(p);
+    for (auto& pk : packed) pk.xform = m * pk.xform;
     // Volumes stay axis aligned: they follow translation and (average) scale, not rotation.
     for (auto& vol : volumes) {
         float s = (length(m.transformDir(Vec3(1, 0, 0))) + length(m.transformDir(Vec3(0, 1, 0))) + length(m.transformDir(Vec3(0, 0, 1)))) / 3.f;
@@ -118,11 +121,63 @@ void Geometry::transform(const Mat4& m) {
 }
 
 void Geometry::bounds(Vec3& mn, Vec3& mx) const {
-    if (P.empty() && volumes.empty()) { mn = mx = Vec3(0); return; }
+    if (P.empty() && volumes.empty() && packed.empty()) { mn = mx = Vec3(0); return; }
     mn = Vec3(std::numeric_limits<float>::max());
     mx = Vec3(-std::numeric_limits<float>::max());
     for (auto& p : P) { mn = vmin(mn, p); mx = vmax(mx, p); }
     for (auto& v : volumes) { mn = vmin(mn, v.bmin()); mx = vmax(mx, v.bmax()); }
+    // packed prims: the prototype's box (computed once per prototype) with its 8 corners transformed
+    std::vector<std::pair<const Geometry*, std::pair<Vec3, Vec3>>> cache;
+    for (const PackedPrim& pk : packed) {
+        if (!pk.geo) continue;
+        const std::pair<Vec3, Vec3>* box = nullptr;
+        for (auto& c : cache) if (c.first == pk.geo.get()) { box = &c.second; break; }
+        if (!box) {
+            Vec3 a, b;
+            pk.geo->bounds(a, b);
+            if (pk.geo->empty()) continue;
+            cache.push_back({pk.geo.get(), {a, b}});
+            box = &cache.back().second;
+        }
+        for (int k = 0; k < 8; ++k) {
+            Vec3 c((k & 1) ? box->second.x : box->first.x, (k & 2) ? box->second.y : box->first.y, (k & 4) ? box->second.z : box->first.z);
+            Vec3 w = pk.xform.transformPoint(c);
+            mn = vmin(mn, w); mx = vmax(mx, w);
+        }
+    }
+    if (mn.x > mx.x) mn = mx = Vec3(0); // only empty packed prims
+}
+
+void Geometry::unpack() {
+    if (packed.empty()) return;
+    std::vector<PackedPrim> list;
+    list.swap(packed);
+    for (const PackedPrim& pk : list) {
+        if (!pk.geo) continue;
+        Geometry copy = *pk.geo;
+        copy.unpack();
+        copy.transform(pk.xform);
+        if (pk.hasColor && !copy.findAttrib(AttribClass::Point, "Cd") && !copy.findAttrib(AttribClass::Prim, "Cd")) {
+            Attrib& cd = copy.addAttrib(AttribClass::Prim, "Cd", 3, Vec3(1));
+            for (size_t k = 0; k < copy.numPrims(); ++k) cd.setV(k, pk.color);
+            if (copy.numPrims() == 0) { // loose points
+                Attrib& pcd = copy.addAttrib(AttribClass::Point, "Cd", 3, Vec3(1));
+                for (size_t k = 0; k < copy.numPoints(); ++k) pcd.setV(k, pk.color);
+            }
+        }
+        merge(copy);
+    }
+}
+
+void Geometry::packedTotals(size_t& points, size_t& prims) const {
+    points = prims = 0;
+    for (const PackedPrim& pk : packed) {
+        if (!pk.geo) continue;
+        size_t a = 0, b = 0;
+        pk.geo->packedTotals(a, b);
+        points += pk.geo->numPoints() + a;
+        prims += pk.geo->numPrims() + b;
+    }
 }
 
 Vec3 Geometry::primNormal(int prim) const {

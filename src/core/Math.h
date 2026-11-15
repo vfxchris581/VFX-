@@ -92,6 +92,30 @@ struct Mat4 {
         return normalize(r);
     }
 
+    // Inverse of an affine transform (rotation/scale/shear + translation; last row 0 0 0 1).
+    // A singular 3x3 part gives the identity.
+    Mat4 inverseAffine() const {
+        float a = at(0, 0), b = at(0, 1), c = at(0, 2);
+        float d = at(1, 0), e = at(1, 1), f = at(1, 2);
+        float g = at(2, 0), h = at(2, 1), i = at(2, 2);
+        float A = e * i - f * h, B = f * g - d * i, C = d * h - e * g;
+        float det = a * A + b * B + c * C;
+        Mat4 r;
+        if (std::fabs(det) < 1e-30f) return r;
+        float inv = 1.f / det;
+        r.at(0, 0) = A * inv; r.at(0, 1) = (c * h - b * i) * inv; r.at(0, 2) = (b * f - c * e) * inv;
+        r.at(1, 0) = B * inv; r.at(1, 1) = (a * i - c * g) * inv; r.at(1, 2) = (c * d - a * f) * inv;
+        r.at(2, 0) = C * inv; r.at(2, 1) = (b * g - a * h) * inv; r.at(2, 2) = (a * e - b * d) * inv;
+        Vec3 t(at(0, 3), at(1, 3), at(2, 3));
+        Vec3 it = r.transformDir(t);
+        r.at(0, 3) = -it.x; r.at(1, 3) = -it.y; r.at(2, 3) = -it.z;
+        return r;
+    }
+    float det3() const {
+        return at(0, 0) * (at(1, 1) * at(2, 2) - at(1, 2) * at(2, 1)) - at(0, 1) * (at(1, 0) * at(2, 2) - at(1, 2) * at(2, 0)) +
+               at(0, 2) * (at(1, 0) * at(2, 1) - at(1, 1) * at(2, 0));
+    }
+
     static Mat4 translate(const Vec3& t) {
         Mat4 r;
         r.at(0, 3) = t.x; r.at(1, 3) = t.y; r.at(2, 3) = t.z;

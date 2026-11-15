@@ -68,6 +68,7 @@ float attrF(const Geometry& g, const char* name, int prim, int pt, float def) {
 bool writeUsda(const std::string& path, const UsdExport& o, const std::function<bool(float, Geometry&, std::string*)>& cook, std::string* err) {
     Geometry g0;
     if (!cook(float(o.start), g0, err)) return false;
+    g0.unpack(); // packed prims are written as plain meshes (no USD point instancers yet)
     const bool anim = o.end > o.start;
     // classify primitives
     std::vector<int> faces, curves;
@@ -90,6 +91,7 @@ bool writeUsda(const std::string& path, const UsdExport& o, const std::function<
             Geometry gf;
             if (f == o.start) gf = g0;
             else if (!cook(float(f), gf, err)) return false;
+            gf.unpack();
             if (gf.numPoints() != g0.numPoints() || gf.numPrims() != g0.numPrims()) {
                 if (err) *err = "The point count changes at frame " + std::to_string(f) + "; USD animation export needs a fixed topology (export single frames instead).";
                 return false;

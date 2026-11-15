@@ -175,6 +175,9 @@ void App::drawViewport() {
             std::snprintf(buf, sizeof buf, "image  %d x %d%s", g.images[0].w, g.images[0].h, g.images[0].depth ? "  + depth (Z)" : "");
         else if (!g.volumes.empty() && g.numPoints() == 0)
             std::snprintf(buf, sizeof buf, "volume  %d x %d x %d voxels", g.volumes[0].nx, g.volumes[0].ny, g.volumes[0].nz);
+        else if (!g.packed.empty())
+            std::snprintf(buf, sizeof buf, "%zu points  %zu primitives  %zu packed  %zu tris (instanced)%s", g.numPoints(), g.numPrims(), g.numPacked(),
+                          renderer.stats().triangles, g.volumes.empty() ? "" : "  + volume");
         else
             std::snprintf(buf, sizeof buf, "%zu points  %zu primitives  %zu tris%s", g.numPoints(), g.numPrims(), renderer.stats().triangles, g.volumes.empty() ? "" : "  + volume");
         dl->AddText(ImVec2(tp.x, tp.y + ImGui::GetTextLineHeight()), IM_COL32(190, 190, 195, 220), buf);

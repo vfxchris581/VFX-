@@ -4,6 +4,7 @@
 #include "core/Geometry.h"
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,7 @@ struct ViewOptions {
 
 struct RenderStats {
     size_t triangles = 0, lines = 0, points = 0, volumes = 0;
+    size_t instances = 0; // packed prims drawn with instancing (their triangles are in `triangles`)
 };
 
 class Renderer {
@@ -102,7 +104,18 @@ private:
     const GpuTexture* gpuTexture(int id, bool color);
     void drawMaterials(const Mat4& V, const Mat4& P, const ViewOptions& opt);
     std::vector<MatGroup> groups_;
-    bool fullVertex_ = false; // groups carry uv + material channels
+    struct ProtoDraw {
+        std::weak_ptr<const Geometry> owner; // the prototype these batches were built from
+        std::vector<MatGroup> groups;
+        unsigned instVbo = 0;
+        int count = 0;
+        size_t trisEach = 0;
+        bool hasCd = false;
+    };
+    std::map<const Geometry*, ProtoDraw> protos_;
+    void buildTriGroups(const Geometry& g, std::vector<MatGroup>& out, size_t& triCount);
+    void setInstances(const Geometry& g, size_t& triCount);
+    void drawInstanced(const Batch& b, int instances);
     std::map<std::string, GpuTexture> texCache_;
     std::vector<std::string> textureErrors_;
     // One message per file: later reports of the same file (without the reason) are dropped.

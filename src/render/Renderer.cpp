@@ -2,6 +2,7 @@
 #include "GL.h"
 #include "core/Image.h"
 #include <algorithm>
+#include <functional>
 #include <unordered_map>
 #include <cmath>
 #include <set>
@@ -45,13 +46,19 @@ const char* kMeshVS = R"(#version 330 core
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNrm;
 layout(location=2) in vec3 aCol;
+layout(location=6) in vec4 aI0;     // instance transform columns (identity when not instanced)
+layout(location=7) in vec4 aI1;
+layout(location=8) in vec4 aI2;
+layout(location=9) in vec4 aI3;
+layout(location=10) in vec4 aICol;  // instance colour; w = 1 replaces the vertex colour
 uniform mat4 uView, uProj;
 out vec3 vN; out vec3 vCol; out vec3 vPosV;
 void main() {
-    vec4 pv = uView * vec4(aPos, 1.0);
+    mat4 inst = mat4(aI0, aI1, aI2, aI3);
+    vec4 pv = uView * (inst * vec4(aPos, 1.0));
     vPosV = pv.xyz;
-    vN = mat3(uView) * aNrm;
-    vCol = aCol;
+    vN = mat3(uView) * (transpose(inverse(mat3(inst))) * aNrm);
+    vCol = aICol.w > 0.5 ? aICol.rgb : aCol;
     gl_Position = uProj * pv;
 })";
 
@@ -87,13 +94,20 @@ layout(location=2) in vec3 aCol;
 layout(location=3) in vec2 aUV;
 layout(location=4) in vec3 aMat;   // rough, metal, spec
 layout(location=5) in vec3 aMat2;  // transmit, emit, sss
+layout(location=6) in vec4 aI0;     // instance transform columns (identity when not instanced)
+layout(location=7) in vec4 aI1;
+layout(location=8) in vec4 aI2;
+layout(location=9) in vec4 aI3;
+layout(location=10) in vec4 aICol;  // instance colour; w = 1 replaces the vertex colour
 uniform mat4 uView, uProj;
 out vec3 vN; out vec3 vCol; out vec3 vPosV; out vec2 vUV; out vec3 vMat; out vec3 vMat2;
 void main() {
-    vec4 pv = uView * vec4(aPos, 1.0);
+    mat4 inst = mat4(aI0, aI1, aI2, aI3);
+    vec4 pv = uView * (inst * vec4(aPos, 1.0));
     vPosV = pv.xyz;
-    vN = mat3(uView) * aNrm;
-    vCol = aCol; vUV = aUV; vMat = aMat; vMat2 = aMat2;
+    vN = mat3(uView) * (transpose(inverse(mat3(inst))) * aNrm);
+    vCol = aICol.w > 0.5 ? aICol.rgb : aCol;
+    vUV = aUV; vMat = aMat; vMat2 = aMat2;
     gl_Position = uProj * pv;
 })";
 
@@ -471,6 +485,14 @@ void Renderer::shutdown() {
     groups_.clear();
     for (auto& t : texCache_) if (t.second.tex) glDeleteTextures(1, &t.second.tex);
     texCache_.clear();
+    for (auto& [ptr, pd] : protos_) {
+        for (auto& gr : pd.groups) {
+            if (gr.batch.vbo) glDeleteBuffers(1, &gr.batch.vbo);
+            if (gr.batch.vao) glDeleteVertexArrays(1, &gr.batch.vao);
+        }
+        if (pd.instVbo) glDeleteBuffers(1, &pd.instVbo);
+    }
+    protos_.clear();
     if (progMat_) glDeleteProgram(progMat_);
     progMat_ = 0;
     for (Batch* b : {&tris_, &wire_, &curves_, &points_, &loose_, &normals_, &grid_, &cube_, &guides_}) {
@@ -518,18 +540,16 @@ void Renderer::clearGeometry() {
     setGeometry(empty, 0);
 }
 
-void Renderer::setGeometry(const Geometry& g, uint64_t stamp) {
-    if (stamp != 0 && stamp == stamp_) return;
-    stamp_ = stamp;
+// Triangles of every closed polygon, grouped by texture maps. Light vertex format (pos, normal,
+// colour) unless the geometry has uv or material attributes.
+void Renderer::buildTriGroups(const Geometry& g, std::vector<MatGroup>& out, size_t& triCount) {
     const Attrib* pN = g.findAttrib(AttribClass::Point, "N");
     const Attrib* qN = g.findAttrib(AttribClass::Prim, "N");
     const Attrib* pCd = g.findAttrib(AttribClass::Point, "Cd");
     const Attrib* qCd = g.findAttrib(AttribClass::Prim, "Cd");
-    const Attrib* pscale = g.findAttrib(AttribClass::Point, "pscale");
     if (pN && pN->tuple != 3) pN = nullptr;
     if (qN && qN->tuple != 3) qN = nullptr;
     const Vec3 defCol(0.72f, 0.74f, 0.78f);
-
     // Material channels, read like the path tracer: a prim attribute wins over a point attribute.
     struct MatA { const Attrib* prim; const Attrib* point; float def; };
     auto ma = [&](const char* n, float def) { return MatA{g.findAttrib(AttribClass::Prim, n), g.findAttrib(AttribClass::Point, n), def}; };
@@ -564,6 +584,135 @@ void Renderer::setGeometry(const Geometry& g, uint64_t stamp) {
         return i;
     };
 
+    for (size_t pi = 0; pi < g.numPrims(); ++pi) {
+        const Prim& pr = g.prims[pi];
+        if (!pr.closed || pr.count < 3) continue;
+        auto colorOf = [&](int pt) {
+            if (pCd) return pCd->getV(size_t(pt));
+            if (qCd) return qCd->getV(pi);
+            return defCol;
+        };
+            Vec3 fn = qN ? qN->getV(pi) : g.primNormal(int(pi));
+        const int first = g.vertices[size_t(pr.start)];
+        Key key{{0, 0, 0, 0}};
+        if (full)
+            for (int m = 0; m < 4; ++m) key.m[m] = std::max(0, int(val(aMaps[m], pi, first) + 0.5f));
+        const size_t gi = groupFor(key);
+        std::vector<float>& tri = gdata[gi];
+        for (int k = 1; k + 1 < pr.count; ++k) {
+            int ids[3] = {first, g.vertices[size_t(pr.start + k)], g.vertices[size_t(pr.start + k + 1)]};
+            for (int id : ids) {
+                push3(tri, g.P[size_t(id)]);
+                Vec3 n = pN ? pN->getV(size_t(id)) : fn;
+                if (dot(n, n) < 1e-12f) n = fn; // missing (zero) normals after merges
+                push3(tri, n);
+                push3(tri, colorOf(id));
+                if (full) {
+                    Vec3 uv = uvA ? uvA->getV(size_t(id)) : Vec3(0);
+                    tri.push_back(uv.x); tri.push_back(uv.y);
+                    tri.push_back(val(aRough, pi, id)); tri.push_back(val(aMetal, pi, id)); tri.push_back(val(aSpec, pi, id));
+                    float tr = val(aTrans, pi, id);
+                    tri.push_back(tr); tri.push_back(val(aEmit, pi, id)); tri.push_back(val(aSss, pi, id));
+                    if (tr > 0.01f) gtrans[gi] = 1;
+                }
+            }
+        }
+    }
+    const int meshLayout[3] = {3, 3, 3};
+    const int fullLayout[6] = {3, 3, 3, 2, 3, 3};
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (gdata[i].empty()) continue;
+        MatGroup mg;
+        for (int m = 0; m < 4; ++m) mg.maps[m] = keys[i].m[m];
+        mg.transmissive = gtrans[i] != 0;
+        if (full) upload(mg.batch, gdata[i], fpv, fullLayout, 6);
+        else upload(mg.batch, gdata[i], fpv, meshLayout, 3);
+        triCount += size_t(mg.batch.count / 3);
+        out.push_back(mg);
+    }
+}
+
+// Packed prims: one set of triangle groups per prototype (kept while the prototype is alive and
+// still used), drawn with per-instance transform + colour attributes (locations 6-10).
+void Renderer::setInstances(const Geometry& g, size_t& triCount) {
+    std::unordered_map<const Geometry*, std::vector<float>> perProto;
+    std::unordered_map<const Geometry*, std::shared_ptr<const Geometry>> keep;
+    size_t budget = 20u * 1000u * 1000u;
+    std::function<void(const Geometry&, const Mat4&, Vec3, bool)> collect = [&](const Geometry& gg, const Mat4& parent, Vec3 col, bool hasCol) {
+        for (const PackedPrim& pk : gg.packed) {
+            if (!pk.geo || !budget) continue;
+            const Mat4 M = parent * pk.xform;
+            const Vec3 c = pk.hasColor ? pk.color : col;
+            const bool hc = pk.hasColor || hasCol;
+            if (pk.geo->numPrims()) {
+                std::vector<float>& d = perProto[pk.geo.get()];
+                keep[pk.geo.get()] = pk.geo;
+                for (int k = 0; k < 16; ++k) d.push_back(M.m[k]);
+                d.push_back(c.x); d.push_back(c.y); d.push_back(c.z); d.push_back(hc ? 1.f : 0.f);
+                --budget;
+            }
+            if (!pk.geo->packed.empty()) collect(*pk.geo, M, c, hc);
+        }
+    };
+    collect(g, Mat4(), Vec3(1), false);
+    stats_.instances = 0;
+    for (auto it = protos_.begin(); it != protos_.end();) {
+        auto f = keep.find(it->first);
+        bool stale = f == keep.end() || it->second.owner.expired() || it->second.owner.lock() != f->second;
+        if (stale) {
+            for (auto& gr : it->second.groups) {
+                if (gr.batch.vbo) glDeleteBuffers(1, &gr.batch.vbo);
+                if (gr.batch.vao) glDeleteVertexArrays(1, &gr.batch.vao);
+            }
+            if (it->second.instVbo) glDeleteBuffers(1, &it->second.instVbo);
+            it = protos_.erase(it);
+        } else ++it;
+    }
+    for (auto& [ptr, data] : perProto) {
+        ProtoDraw& pd = protos_[ptr];
+        if (pd.groups.empty() && pd.owner.expired()) {
+            pd.owner = keep[ptr];
+            size_t n = 0;
+            buildTriGroups(*ptr, pd.groups, n);
+            pd.trisEach = n;
+            const Attrib* pc = ptr->findAttrib(AttribClass::Point, "Cd");
+            const Attrib* qc = ptr->findAttrib(AttribClass::Prim, "Cd");
+            pd.hasCd = pc || qc;
+            glGenBuffers(1, &pd.instVbo);
+        }
+        // the instance colour only replaces the prototype's default colour
+        if (pd.hasCd) for (size_t i = 19; i < data.size(); i += 20) data[i] = 0.f;
+        pd.count = int(data.size() / 20);
+        glBindBuffer(GL_ARRAY_BUFFER, pd.instVbo);
+        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(data.size() * sizeof(float)), data.data(), GL_STATIC_DRAW);
+        for (MatGroup& mg : pd.groups) {
+            glBindVertexArray(mg.batch.vao);
+            glBindBuffer(GL_ARRAY_BUFFER, pd.instVbo);
+            for (int k = 0; k < 5; ++k) {
+                glEnableVertexAttribArray(GLuint(6 + k));
+                glVertexAttribPointer(GLuint(6 + k), 4, GL_FLOAT, GL_FALSE, 20 * sizeof(float), reinterpret_cast<void*>(size_t(k) * 4 * sizeof(float)));
+                glVertexAttribDivisor(GLuint(6 + k), 1);
+            }
+        }
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        triCount += pd.trisEach * size_t(pd.count);
+        stats_.instances += size_t(pd.count);
+    }
+}
+
+void Renderer::setGeometry(const Geometry& g, uint64_t stamp) {
+    if (stamp != 0 && stamp == stamp_) return;
+    stamp_ = stamp;
+    const Attrib* pN = g.findAttrib(AttribClass::Point, "N");
+    const Attrib* qN = g.findAttrib(AttribClass::Prim, "N");
+    const Attrib* pCd = g.findAttrib(AttribClass::Point, "Cd");
+    const Attrib* qCd = g.findAttrib(AttribClass::Prim, "Cd");
+    const Attrib* pscale = g.findAttrib(AttribClass::Point, "pscale");
+    if (pN && pN->tuple != 3) pN = nullptr;
+    if (qN && qN->tuple != 3) qN = nullptr;
+    const Vec3 defCol(0.72f, 0.74f, 0.78f);
+
     std::vector<float> wire, curve, pts, nrm;
     std::set<std::pair<int, int>> edges;
     for (size_t pi = 0; pi < g.numPrims(); ++pi) {
@@ -575,31 +724,6 @@ void Renderer::setGeometry(const Geometry& g, uint64_t stamp) {
             return defCol;
         };
         if (pr.closed && pr.count >= 3) {
-            Vec3 fn = qN ? qN->getV(pi) : g.primNormal(int(pi));
-            const int first = g.vertices[size_t(pr.start)];
-            Key key{{0, 0, 0, 0}};
-            if (full)
-                for (int m = 0; m < 4; ++m) key.m[m] = std::max(0, int(val(aMaps[m], pi, first) + 0.5f));
-            const size_t gi = groupFor(key);
-            std::vector<float>& tri = gdata[gi];
-            for (int k = 1; k + 1 < pr.count; ++k) {
-                int ids[3] = {first, g.vertices[size_t(pr.start + k)], g.vertices[size_t(pr.start + k + 1)]};
-                for (int id : ids) {
-                    push3(tri, g.P[size_t(id)]);
-                    Vec3 n = pN ? pN->getV(size_t(id)) : fn;
-                    if (dot(n, n) < 1e-12f) n = fn; // missing (zero) normals after merges
-                    push3(tri, n);
-                    push3(tri, colorOf(id));
-                    if (full) {
-                        Vec3 uv = uvA ? uvA->getV(size_t(id)) : Vec3(0);
-                        tri.push_back(uv.x); tri.push_back(uv.y);
-                        tri.push_back(val(aRough, pi, id)); tri.push_back(val(aMetal, pi, id)); tri.push_back(val(aSpec, pi, id));
-                        float tr = val(aTrans, pi, id);
-                        tri.push_back(tr); tri.push_back(val(aEmit, pi, id)); tri.push_back(val(aSss, pi, id));
-                        if (tr > 0.01f) gtrans[gi] = 1;
-                    }
-                }
-            }
             for (int k = 0; k < pr.count; ++k) {
                 int a = g.vertices[size_t(pr.start + k)], b = g.vertices[size_t(pr.start + (k + 1) % pr.count)];
                 if (edges.insert({std::min(a, b), std::max(a, b)}).second) {
@@ -650,24 +774,18 @@ void Renderer::setGeometry(const Geometry& g, uint64_t stamp) {
         if (gr.batch.vao) glDeleteVertexArrays(1, &gr.batch.vao);
     }
     groups_.clear();
-    fullVertex_ = full;
-    const int fullLayout[6] = {3, 3, 3, 2, 3, 3};
     size_t triCount = 0;
-    for (size_t i = 0; i < keys.size(); ++i) {
-        if (gdata[i].empty()) continue;
-        MatGroup mg;
-        for (int m = 0; m < 4; ++m) mg.maps[m] = keys[i].m[m];
-        mg.transmissive = gtrans[i] != 0;
-        if (full) upload(mg.batch, gdata[i], fpv, fullLayout, 6);
-        else upload(mg.batch, gdata[i], fpv, meshLayout, 3);
-        triCount += size_t(mg.batch.count / 3);
-        groups_.push_back(mg);
-    }
+    buildTriGroups(g, groups_, triCount);
+    setInstances(g, triCount);
     // texture maps: load now so errors are known with the geometry (cached by file)
     textureErrors_.clear();
     for (const MatGroup& mg : groups_)
         for (int m = 0; m < 4; ++m)
             if (mg.maps[m]) gpuTexture(mg.maps[m], m == 0);
+    for (auto& [ptr, pd] : protos_)
+        for (const MatGroup& mg : pd.groups)
+            for (int m = 0; m < 4; ++m)
+                if (mg.maps[m]) gpuTexture(mg.maps[m], m == 0);
     upload(wire_, wire, 6, lineLayout, 2);
     upload(curves_, curve, 6, lineLayout, 2);
     upload(points_, pts, 7, pointLayout, 3);
@@ -862,12 +980,11 @@ void Renderer::drawMaterials(const Mat4& V, const Mat4& P, const ViewOptions& op
         locUdim[m] = glGetUniformLocation(progMat_, ("uUdim" + i).c_str());
         glUniform1i(locMap[m], m);
     }
-    if (!fullVertex_) {
-        // light vertex format: material channels come from constant attribute values (defaults)
-        glVertexAttrib3f(3, 0.f, 0.f, 0.f);
-        glVertexAttrib3f(4, 0.65f, 0.f, 0.5f);
-        glVertexAttrib3f(5, 0.f, 0.f, 0.f);
-    }
+    // light vertex format: material channels come from constant attribute values (defaults);
+    // VAOs with the full format have arrays there, which take precedence
+    glVertexAttrib3f(3, 0.f, 0.f, 0.f);
+    glVertexAttrib3f(4, 0.65f, 0.f, 0.5f);
+    glVertexAttrib3f(5, 0.f, 0.f, 0.f);
     std::vector<GLint> tiles(400, -1);
     auto bindGroup = [&](const MatGroup& mg) {
         for (int m = 0; m < 4; ++m) {
@@ -888,6 +1005,12 @@ void Renderer::drawMaterials(const Mat4& V, const Mat4& P, const ViewOptions& op
         drawBatch(mg.batch, GL_TRIANGLES);
         anyGlass |= mg.transmissive;
     }
+    for (auto& [ptr, pd] : protos_)
+        for (const MatGroup& mg : pd.groups) {
+            bindGroup(mg);
+            drawInstanced(mg.batch, pd.count);
+            anyGlass |= mg.transmissive;
+        }
     if (anyGlass) {
         glEnable(GL_BLEND);
         glDepthMask(GL_FALSE);
@@ -897,11 +1020,21 @@ void Renderer::drawMaterials(const Mat4& V, const Mat4& P, const ViewOptions& op
             else glBlendFunc(GL_ONE, GL_ONE);                  // dst += reflections
             for (const MatGroup& mg : groups_)
                 if (mg.transmissive) { bindGroup(mg); drawBatch(mg.batch, GL_TRIANGLES); }
+            for (auto& [ptr, pd] : protos_)
+                for (const MatGroup& mg : pd.groups)
+                    if (mg.transmissive) { bindGroup(mg); drawInstanced(mg.batch, pd.count); }
         }
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }
     for (int m = 3; m >= 0; --m) { glActiveTexture(GL_TEXTURE0 + unsigned(m)); glBindTexture(GL_TEXTURE_2D_ARRAY, 0); }
+}
+
+void Renderer::drawInstanced(const Batch& b, int instances) {
+    if (!b.vao || !b.count || instances <= 0) return;
+    glBindVertexArray(b.vao);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, b.count, instances);
+    glBindVertexArray(0);
 }
 
 void Renderer::drawBatch(const Batch& b, unsigned mode) {
@@ -918,6 +1051,12 @@ unsigned Renderer::render(int w, int h, const Camera& cam, const ViewOptions& op
     glGetIntegerv(GL_VIEWPORT, prevViewport);
 
     ensureTargets(w, h);
+    // not-instanced draws see an identity instance transform and no instance colour
+    glVertexAttrib4f(6, 1, 0, 0, 0);
+    glVertexAttrib4f(7, 0, 1, 0, 0);
+    glVertexAttrib4f(8, 0, 0, 1, 0);
+    glVertexAttrib4f(9, 0, 0, 0, 1);
+    glVertexAttrib4f(10, 0, 0, 0, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, msFbo_);
     glViewport(0, 0, w, h);
     glDisable(GL_BLEND);
@@ -969,6 +1108,8 @@ unsigned Renderer::render(int w, int h, const Camera& cam, const ViewOptions& op
             setMat(progMesh_, "uProj", P);
             glUniform1i(glGetUniformLocation(progMesh_, "uBackTint"), opt.backfaceTint ? 1 : 0);
             for (const MatGroup& mg : groups_) drawBatch(mg.batch, GL_TRIANGLES);
+            for (auto& [ptr, pd] : protos_)
+                for (const MatGroup& mg : pd.groups) drawInstanced(mg.batch, pd.count);
         }
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
