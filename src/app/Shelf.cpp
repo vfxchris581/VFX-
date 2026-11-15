@@ -252,6 +252,7 @@ void App::drawShelf() {
     static const Tool modify[] = {{"Transform", "xform", "Move, rotate, scale"}, {"Subdivide", "subdivide", "Smooth by subdividing"}, {"PolyExtrude", "polyextrude", "Extrude faces"},
                                   {"Mountain", "mountain", "Noise displacement"}, {"Smooth", "smooth", "Relax points"}, {"Scatter", "scatter", "Scatter points on a surface"},
                                   {"Copy to Points", "copytopoints", "Copy geometry onto points"}, {"Color", "color", "Set color"}, {"Material", "material", "Roughness, metallic, glow"},
+                                  {"Material Builder", "materialbuilder", "A shader network (noise, cells, ramps, textures...)\nfor the selected node; double-click it to edit"},
                                   {"Merge", "merge", "Combine geometry"}, {"Wrangle", "attribwrangle", "Run VEX-lite code"}};
     static const Tool lights[] = {{"Camera", "camera", "New camera from the current view"}, {"Point Light", "pointlight", "Light in all directions from a point"},
                                   {"Spot Light", "spotlight", "Cone of light aimed at the scene"}, {"Area Light", "arealight", "Soft light from a rectangle above the scene"},
@@ -275,6 +276,11 @@ void App::drawShelf() {
                                 {"Roto", "copshape", "Mask from curves"}, {"Blur", "copblur", "Gaussian blur"}, {"Glow", "copglow", "Bloom"},
                                 {"Defocus", "copdefocus", "Depth of field from Z"}, {"Lens", "coplens", "Distortion, aberration, vignette, grain"},
                                 {"Write", "copwrite", "Save images"}};
+    static const Tool shading[] = {{"Noise", "shnoise", "Perlin / fBm / turbulence pattern"}, {"Voronoi", "shvoronoi", "Cells, edges, random cell colours"},
+                                   {"Checker", "shchecker", "Checkerboard"}, {"Wave", "shwave", "Stripes and rings (wood, marble)"},
+                                   {"Color Ramp", "shramp", "Value to colour"}, {"Texture", "shtexture", "Image by uv"}, {"Mix", "shmix", "Blend two values"},
+                                   {"Math", "shmath", "Add, multiply..."}, {"Fit Range", "shfit", "Remap a range"}, {"Bind", "shattrib", "Read an attribute"},
+                                   {"Globals", "shglobals", "P, N, uv, Cd"}};
     static const Tool pyro[] = {{"Pyro Solver", "pyrosolver", "Smoke / fire from the selected node"}, {"Fog Volume", "fogvolume", "Fill the selected mesh with fog"}};
 
     auto tools = [&](const Tool* list, size_t n) {
@@ -295,6 +301,16 @@ void App::drawShelf() {
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Particles")) { tools(particles, std::size(particles)); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Shading")) {
+            if (net().owner() && net().owner()->type().name == "materialbuilder") tools(shading, std::size(shading));
+            else {
+                static const Tool mb[] = {{"Material Builder", "materialbuilder", "A shader network for the selected node; double-click it to edit"}};
+                tools(mb, 1);
+                ImGui::SameLine();
+                ImGui::TextDisabled("Double-click a Material Builder to add pattern nodes.");
+            }
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Pyro FX")) { tools(pyro, std::size(pyro)); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Rigid Bodies")) { tools(destruction, std::size(destruction)); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Fluids")) { tools(fluids, std::size(fluids)); ImGui::EndTabItem(); }

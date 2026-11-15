@@ -260,8 +260,8 @@ void App::drawMenuBar() {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Export")) {
-            if (ImGui::MenuItem("Geometry (.obj / .ply)...", nullptr, false, net().displayNode() != nullptr)) openFileDialog(FileDialogMode::ExportObj);
-            if (ImGui::MenuItem("USD (.usda)...", nullptr, false, net().displayNode() != nullptr)) openFileDialog(FileDialogMode::ExportUsd);
+            if (ImGui::MenuItem("Geometry (.obj / .ply)...", nullptr, false, viewNet().displayNode() != nullptr)) openFileDialog(FileDialogMode::ExportObj);
+            if (ImGui::MenuItem("USD (.usda)...", nullptr, false, viewNet().displayNode() != nullptr)) openFileDialog(FileDialogMode::ExportUsd);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("The displayed node with its materials, plus the scene's cameras and lights.\nAnimated nodes are written over the timeline range.");
             unavailable("Alembic Scene...");
             unavailable("Filmbox FBX...");

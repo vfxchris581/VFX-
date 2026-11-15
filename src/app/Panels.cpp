@@ -166,7 +166,7 @@ void App::drawViewport() {
     // overlays
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // images (compositing): shown over the 3D view, fitted to the pane, on a dark checkerboard
-    if (Node* dn = net().displayNode(); dn && !dn->geometry().images.empty() && dn->geometry().images[0].valid() && dn->geometry().numPoints() == 0) {
+    if (Node* dn = viewNet().displayNode(); dn && !dn->geometry().images.empty() && dn->geometry().images[0].valid() && dn->geometry().numPoints() == 0) {
         const ImageLayer& L = dn->geometry().images[0];
         if (dn->cookStamp() != compStamp_ || !compTex_) {
             compStamp_ = dn->cookStamp();
@@ -218,7 +218,7 @@ void App::drawViewport() {
         dl->AddRectFilled(ImVec2(b.x, a.y), ImVec2(imgPos.x + avail.x, b.y), dim);
         dl->AddRect(a, b, IM_COL32(255, 215, 90, 200));
     }
-    Node* d = net().displayNode();
+    Node* d = viewNet().displayNode();
     ImVec2 tp(imgPos.x + 10, imgPos.y + 8);
     if (d) {
         const Geometry& g = d->geometry();

@@ -203,6 +203,7 @@ void cookRender(CookContext& c) {
     rs.denoise = c.b("denoise");
     rs.transparentBackground = c.b("transparent");
     rs.fps = c.fps();
+    rs.frame = c.frame();
     // frame the geometry when the scene has no saved camera
     if (!rs.hasCamera) {
         Vec3 mn, mx;

@@ -59,10 +59,13 @@ void App::drawParameters() {
         ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "Warning: %s", n->warning().c_str());
     }
     if (n->subnet()) {
-        if (ImGui::Button("Dive In")) { diveInto(n); ImGui::End(); return; }
+        const bool shader = n->type().name == "materialbuilder";
+        if (ImGui::Button(shader ? "Edit Shader Network" : "Dive In")) { diveInto(n); ImGui::End(); return; }
         ImGui::SameLine();
-        if (ImGui::Button("Save As Asset")) saveAsset(n);
-        ImGui::SameLine();
+        if (!shader) {
+            if (ImGui::Button("Save As Asset")) saveAsset(n);
+            ImGui::SameLine();
+        }
         ImGui::TextDisabled("%zu nodes inside", n->subnet()->nodes().size());
     }
     ImGui::Separator();

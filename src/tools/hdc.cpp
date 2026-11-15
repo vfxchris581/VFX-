@@ -244,6 +244,7 @@ int main(int argc, char** argv) {
         RenderSettings rs = g.render;
         if (const char* s = opt(argc, argv, "--samples")) rs.samples = std::atoi(s);
         rs.fps = g.fps;
+        rs.frame = g.frame;
         for (int i = 1; i < argc; ++i) {
             if (!std::strcmp(argv[i], "--denoise")) rs.denoise = true;
             if (!std::strcmp(argv[i], "--no-denoise")) rs.denoise = false;

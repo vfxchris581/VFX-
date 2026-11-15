@@ -180,6 +180,16 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Examples | `examples/scripts`: a ring of packed spheres built in Python, a scene report, a simulation wedge |
 | Limits | Not done: Python-defined node types, shelf tools and callbacks on parameter changes; packed-prim and volume contents aren't exposed to Python; `import hd` from a separate Python process isn't supported (scripts run inside HD or hdc); the sanitizer CI job runs without Python (an embedded interpreter keeps objects until exit) |
 
+## Phase 12: node-based shaders
+
+| Item | Status |
+|---|---|
+| Material Builder | Working: a node holding a shader network (saved with the scene, copy/paste, undo). It compiles the network into a small register program when it cooks, marks the prims with a `shader` attribute and bakes colour, roughness, metallic, specular, transmission, subsurface and emission onto the points for the viewport. Group parameter limits it to some prims. Errors inside the network (no output, a non-shading node, a loop) show on the node, naming the node at fault |
+| Shading nodes | Working (21): Shader Output (principled), Global Variables, Time, Constant Color, Constant Float, Bind Attribute, Math (12 operations), Function (15), Mix, Fit Range, Clamp, Smooth Step, Noise (5 types), Voronoi (4 outputs), Checker, Color Ramp (3 stops), Texture, Combine XYZ, Separate, Random, Wave. Unconnected inputs use the parameter of the same name; unconnected positions read P or uv |
+| Rendering | Working: the path tracer runs the program at every hit (triangles, curves, points, packed instances, shadow rays through transmissive shaders), with bound attributes interpolated across faces and bump mapping from the height gradient (three extra evaluations). Tested: constant, math, mix, fit, ramp, checker, noise range, voronoi cells, bound attributes, bump, time dependence, save/load, emission and white-furnace glass renders, packed instances, a pattern visible in the render |
+| Editor | Working: diving into a Material Builder shows the shader network; the Tab menu and the Shading shelf list only shading nodes, and the viewport and Render View keep showing the scene. Tested in the app smoke test |
+| Limits | Not done: one output per shading node (use Separate for components; no multi-output VOPs), no shader preview ball, no displacement, no volume or light shaders, three-stop ramps only, the viewport preview is per point (fine patterns need dense meshes; bump is render-only), patterns use P where the geometry is at render time (bind a `rest` attribute to keep them on deforming or moving objects), not exposed to Python yet |
+
 ## Modelling aids
 
 | Item | Status |

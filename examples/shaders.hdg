@@ -1,0 +1,571 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 1,
+  "nodes": [
+    {
+      "inputs": ["marble", "wood", "rust", "tiles", "lava", null, null, null],
+      "name": "OUT",
+      "parms": {},
+      "type": "merge",
+      "x": 400,
+      "y": 260
+    },
+    {
+      "inputs": [],
+      "name": "marble_ball",
+      "parms": {
+        "cols": 128,
+        "rad": [0.649999976, 0.649999976, 0.649999976],
+        "rows": 64,
+        "t": [-3.20000005, 0.649999976, 0]
+      },
+      "type": "sphere",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": ["marble_ball"],
+      "name": "marble",
+      "parms": {},
+      "subnet": {
+        "display": "surface_output",
+        "format": "hd-graph",
+        "fps": 24,
+        "frame": 1,
+        "nodes": [
+          {
+            "inputs": ["stone_colors", null, null, null, null, null, null, null, null, null],
+            "name": "surface_output",
+            "parms": {
+              "rough": 0.119999997,
+              "sss": 0.25
+            },
+            "type": "principledshader",
+            "x": 0,
+            "y": 400
+          },
+          {
+            "inputs": [null, null, null],
+            "name": "veins",
+            "parms": {
+              "detail": 2.5,
+              "distortion": 2.20000005,
+              "freq": 2.5
+            },
+            "type": "shwave",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "inputs": ["veins"],
+            "name": "sharpen",
+            "parms": {
+              "op": 6
+            },
+            "type": "shfunc",
+            "x": 0,
+            "y": 100
+          },
+          {
+            "inputs": ["sharpen", null, null, null],
+            "name": "stone_colors",
+            "parms": {
+              "color1": [0.319999993, 0.330000013, 0.360000014],
+              "color2": [0.819999993, 0.819999993, 0.800000012],
+              "color3": [0.959999979, 0.949999988, 0.930000007],
+              "interp": 1,
+              "pos2": 0.550000012
+            },
+            "type": "shramp",
+            "x": 0,
+            "y": 200
+          }
+        ],
+        "range": [1, 240],
+        "render": {
+          "bounces": 4,
+          "curveWidth": 0.0120000001,
+          "denoise": false,
+          "dof": false,
+          "exposure": 1,
+          "focusDist": 5,
+          "fstop": 4,
+          "ground": false,
+          "groundY": 0,
+          "height": 540,
+          "motionBlur": false,
+          "samples": 64,
+          "shutter": 0.5,
+          "skyIntensity": 1,
+          "sunAzimuth": 40,
+          "sunElevation": 50,
+          "sunIntensity": 3,
+          "width": 960
+        },
+        "version": 1
+      },
+      "type": "materialbuilder",
+      "x": 0,
+      "y": 92
+    },
+    {
+      "inputs": [],
+      "name": "wood_ball",
+      "parms": {
+        "cols": 128,
+        "rad": [0.649999976, 0.649999976, 0.649999976],
+        "rows": 64,
+        "t": [-1.60000002, 0.649999976, 0]
+      },
+      "type": "sphere",
+      "x": 200,
+      "y": 0
+    },
+    {
+      "inputs": ["wood_ball"],
+      "name": "wood",
+      "parms": {},
+      "subnet": {
+        "display": "surface_output",
+        "format": "hd-graph",
+        "fps": 24,
+        "frame": 1,
+        "nodes": [
+          {
+            "inputs": ["wood_colors", null, null, null, null, null, null, null, null, "grain"],
+            "name": "surface_output",
+            "parms": {
+              "bumpscale": 0.0199999996,
+              "rough": 0.449999988
+            },
+            "type": "principledshader",
+            "x": 0,
+            "y": 400
+          },
+          {
+            "inputs": [null, null, null],
+            "name": "rings",
+            "parms": {
+              "detail": 1.5,
+              "distortion": 0.349999994,
+              "freq": 9,
+              "profile": 1,
+              "type": 3
+            },
+            "type": "shwave",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "inputs": ["rings", null, null, null],
+            "name": "wood_colors",
+            "parms": {
+              "color1": [0.550000012, 0.330000013, 0.159999996],
+              "color2": [0.720000029, 0.479999989, 0.25999999],
+              "color3": [0.360000014, 0.189999998, 0.0799999982],
+              "interp": 1,
+              "pos2": 0.699999988
+            },
+            "type": "shramp",
+            "x": 0,
+            "y": 120
+          },
+          {
+            "inputs": [null, null, null, null],
+            "name": "grain",
+            "parms": {
+              "freq": [2, 40, 2],
+              "octaves": 3
+            },
+            "type": "shnoise",
+            "x": 250,
+            "y": 120
+          }
+        ],
+        "range": [1, 240],
+        "render": {
+          "bounces": 4,
+          "curveWidth": 0.0120000001,
+          "denoise": false,
+          "dof": false,
+          "exposure": 1,
+          "focusDist": 5,
+          "fstop": 4,
+          "ground": false,
+          "groundY": 0,
+          "height": 540,
+          "motionBlur": false,
+          "samples": 64,
+          "shutter": 0.5,
+          "skyIntensity": 1,
+          "sunAzimuth": 40,
+          "sunElevation": 50,
+          "sunIntensity": 3,
+          "width": 960
+        },
+        "version": 1
+      },
+      "type": "materialbuilder",
+      "x": 200,
+      "y": 92
+    },
+    {
+      "inputs": [],
+      "name": "rust_ball",
+      "parms": {
+        "cols": 128,
+        "rad": [0.649999976, 0.649999976, 0.649999976],
+        "rows": 64,
+        "t": [0, 0.649999976, 0]
+      },
+      "type": "sphere",
+      "x": 400,
+      "y": 0
+    },
+    {
+      "inputs": ["rust_ball"],
+      "name": "rust",
+      "parms": {},
+      "subnet": {
+        "display": "surface_output",
+        "format": "hd-graph",
+        "fps": 24,
+        "frame": 1,
+        "nodes": [
+          {
+            "inputs": ["color", "rough_from_mask", "metal_from_mask", null, null, null, null, null, null, "rust_mask"],
+            "name": "surface_output",
+            "parms": {
+              "bumpscale": 0.0399999991
+            },
+            "type": "principledshader",
+            "x": 0,
+            "y": 400
+          },
+          {
+            "inputs": [null, null, null, null],
+            "name": "rust_mask",
+            "parms": {
+              "freq": [2.5, 2.5, 2.5],
+              "octaves": 6,
+              "rough": 0.600000024
+            },
+            "type": "shnoise",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "inputs": ["rust_mask", null, null],
+            "name": "mask_edge",
+            "parms": {
+              "min": 0.449999988
+            },
+            "type": "shsmooth",
+            "x": 0,
+            "y": 100
+          },
+          {
+            "inputs": [null, null, "mask_edge"],
+            "name": "color",
+            "parms": {
+              "a": [0.779999971, 0.779999971, 0.800000012],
+              "b": [0.449999988, 0.200000003, 0.0799999982]
+            },
+            "type": "shmix",
+            "x": 0,
+            "y": 200
+          },
+          {
+            "inputs": ["mask_edge", null, null, null, null],
+            "name": "metal_from_mask",
+            "parms": {
+              "destmax": 0,
+              "destmin": 1
+            },
+            "type": "shfit",
+            "x": 220,
+            "y": 200
+          },
+          {
+            "inputs": ["mask_edge", null, null, null, null],
+            "name": "rough_from_mask",
+            "parms": {
+              "destmax": 0.899999976,
+              "destmin": 0.25
+            },
+            "type": "shfit",
+            "x": 440,
+            "y": 200
+          }
+        ],
+        "range": [1, 240],
+        "render": {
+          "bounces": 4,
+          "curveWidth": 0.0120000001,
+          "denoise": false,
+          "dof": false,
+          "exposure": 1,
+          "focusDist": 5,
+          "fstop": 4,
+          "ground": false,
+          "groundY": 0,
+          "height": 540,
+          "motionBlur": false,
+          "samples": 64,
+          "shutter": 0.5,
+          "skyIntensity": 1,
+          "sunAzimuth": 40,
+          "sunElevation": 50,
+          "sunIntensity": 3,
+          "width": 960
+        },
+        "version": 1
+      },
+      "type": "materialbuilder",
+      "x": 400,
+      "y": 92
+    },
+    {
+      "inputs": [],
+      "name": "tiles_ball",
+      "parms": {
+        "cols": 128,
+        "rad": [0.649999976, 0.649999976, 0.649999976],
+        "rows": 64,
+        "t": [1.60000014, 0.649999976, 0]
+      },
+      "type": "sphere",
+      "x": 600,
+      "y": 0
+    },
+    {
+      "inputs": ["tiles_ball"],
+      "name": "tiles",
+      "parms": {},
+      "subnet": {
+        "display": "surface_output",
+        "format": "hd-graph",
+        "fps": 24,
+        "frame": 1,
+        "nodes": [
+          {
+            "inputs": ["tiles", "chip_rough", null, null, null, null, null, null, null, null],
+            "name": "surface_output",
+            "parms": {
+              "rough": 0.200000003
+            },
+            "type": "principledshader",
+            "x": 0,
+            "y": 400
+          },
+          {
+            "inputs": [null, null, null, null],
+            "name": "tiles",
+            "parms": {
+              "color1": [0.119999997, 0.270000011, 0.550000012],
+              "color2": [0.920000017, 0.899999976, 0.839999974],
+              "size": 0.219999999
+            },
+            "type": "shchecker",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "inputs": [null, null],
+            "name": "chips",
+            "parms": {
+              "freq": [14, 14, 14],
+              "output": 2
+            },
+            "type": "shvoronoi",
+            "x": 250,
+            "y": 0
+          },
+          {
+            "inputs": ["chips", null, null, null, null],
+            "name": "chip_rough",
+            "parms": {
+              "destmax": 0.349999994,
+              "destmin": 0.119999997
+            },
+            "type": "shfit",
+            "x": 250,
+            "y": 100
+          }
+        ],
+        "range": [1, 240],
+        "render": {
+          "bounces": 4,
+          "curveWidth": 0.0120000001,
+          "denoise": false,
+          "dof": false,
+          "exposure": 1,
+          "focusDist": 5,
+          "fstop": 4,
+          "ground": false,
+          "groundY": 0,
+          "height": 540,
+          "motionBlur": false,
+          "samples": 64,
+          "shutter": 0.5,
+          "skyIntensity": 1,
+          "sunAzimuth": 40,
+          "sunElevation": 50,
+          "sunIntensity": 3,
+          "width": 960
+        },
+        "version": 1
+      },
+      "type": "materialbuilder",
+      "x": 600,
+      "y": 92
+    },
+    {
+      "inputs": [],
+      "name": "lava_ball",
+      "parms": {
+        "cols": 128,
+        "rad": [0.649999976, 0.649999976, 0.649999976],
+        "rows": 64,
+        "t": [3.20000005, 0.649999976, 0]
+      },
+      "type": "sphere",
+      "x": 800,
+      "y": 0
+    },
+    {
+      "inputs": ["lava_ball"],
+      "name": "lava",
+      "parms": {},
+      "subnet": {
+        "display": "surface_output",
+        "format": "hd-graph",
+        "fps": 24,
+        "frame": 1,
+        "nodes": [
+          {
+            "inputs": [null, null, null, null, null, "strength", null, null, null, "crack_mask"],
+            "name": "surface_output",
+            "parms": {
+              "basecolor": [0.0599999987, 0.0500000007, 0.0500000007],
+              "bumpscale": -0.0299999993,
+              "emitcolor": [1, 0.419999987, 0.0799999982],
+              "rough": 0.800000012
+            },
+            "type": "principledshader",
+            "x": 0,
+            "y": 400
+          },
+          {
+            "inputs": [null, null],
+            "name": "cracks",
+            "parms": {
+              "freq": [3.5, 3.5, 3.5],
+              "output": 1
+            },
+            "type": "shvoronoi",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "inputs": ["cracks", null, null],
+            "name": "crack_mask",
+            "parms": {
+              "max": 0,
+              "min": 0.119999997
+            },
+            "type": "shsmooth",
+            "x": 0,
+            "y": 100
+          },
+          {
+            "inputs": [],
+            "name": "time",
+            "parms": {},
+            "type": "shtime",
+            "x": 220,
+            "y": 0
+          },
+          {
+            "inputs": [null, null, "time", null],
+            "name": "flicker",
+            "parms": {
+              "freq": [1.5, 1.5, 1.5]
+            },
+            "type": "shnoise",
+            "x": 220,
+            "y": 100
+          },
+          {
+            "inputs": ["crack_mask", "flicker"],
+            "name": "glow",
+            "parms": {},
+            "type": "shmath",
+            "x": 220,
+            "y": 200
+          },
+          {
+            "inputs": ["glow", null],
+            "name": "strength",
+            "parms": {
+              "b": [14, 14, 14]
+            },
+            "type": "shmath",
+            "x": 220,
+            "y": 300
+          }
+        ],
+        "range": [1, 240],
+        "render": {
+          "bounces": 4,
+          "curveWidth": 0.0120000001,
+          "denoise": false,
+          "dof": false,
+          "exposure": 1,
+          "focusDist": 5,
+          "fstop": 4,
+          "ground": false,
+          "groundY": 0,
+          "height": 540,
+          "motionBlur": false,
+          "samples": 64,
+          "shutter": 0.5,
+          "skyIntensity": 1,
+          "sunAzimuth": 40,
+          "sunElevation": 50,
+          "sunIntensity": 3,
+          "width": 960
+        },
+        "version": 1
+      },
+      "type": "materialbuilder",
+      "x": 800,
+      "y": 92
+    }
+  ],
+  "range": [1, 240],
+  "render": {
+    "bounces": 6,
+    "camera": [0, 0.600000024, 0, 0, 12, 8.5, 35],
+    "curveWidth": 0.0120000001,
+    "denoise": true,
+    "dof": false,
+    "exposure": 1,
+    "focusDist": 5,
+    "fstop": 4,
+    "ground": true,
+    "groundY": 0,
+    "height": 540,
+    "motionBlur": false,
+    "samples": 128,
+    "shutter": 0.5,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

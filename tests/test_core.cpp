@@ -13,6 +13,7 @@
 #include "core/Python.h"
 #include "core/Ops.h"
 #include "core/PathTracer.h"
+#include "core/Shader.h"
 #include "core/Volume.h"
 #include <chrono>
 #include <cstdio>
@@ -2936,6 +2937,273 @@ TEST(ground_plane) {
     gp->parm("size")->val[0] = 1000; gp->parm("tile")->val[0] = 0.01f; gp->touch();
     g.cook(gp);
     CHECK(gp->geometry().numPrims() == 160000u);
+}
+
+static void setP(Node* n, const char* name, Vec3 v) {
+    Parm* p = n->parm(name);
+    p->val[0] = v.x; p->val[1] = v.y; p->val[2] = v.z;
+    n->touch();
+}
+static void setF(Node* n, const char* name, float v) { n->parm(name)->val[0] = v; n->touch(); }
+
+static ShaderOutputs evalAt(const ShaderProgram& p, Vec3 P, Vec3 N = Vec3(0, 1, 0), Vec3 uv = Vec3(0)) {
+    ShaderInputs in;
+    in.P = P; in.N = N; in.uv = uv;
+    ShaderOutputs o;
+    p.eval(in, o);
+    return o;
+}
+
+TEST(shader_compile_eval) {
+    std::string err;
+    {
+        Graph net;
+        CHECK(compileShader(net, 1, 24, err) == nullptr && err.find("Shader Output") != std::string::npos);
+    }
+    // unconnected inputs use the output's own parameters
+    Graph net;
+    Node* out = net.createNode("principledshader");
+    setP(out, "basecolor", Vec3(0.2f, 0.4f, 0.6f));
+    setF(out, "rough", 0.3f); setF(out, "metal", 1); setF(out, "emitstrength", 2);
+    auto p = compileShader(net, 1, 24, err);
+    CHECK(p != nullptr);
+    if (!p) return;
+    ShaderOutputs o = evalAt(*p, Vec3(0));
+    CHECK(length(o.base - Vec3(0.2f, 0.4f, 0.6f)) < 1e-6f);
+    NEAR(o.rough, 0.3f); NEAR(o.metal, 1); NEAR(o.emitStrength, 2);
+    CHECK(p->code.empty()); // constants only: nothing to execute
+    // math: (2,3,4) * 0.5
+    Node* m = net.createNode("shmath");
+    setP(m, "a", Vec3(2, 3, 4)); setP(m, "b", Vec3(0.5f));
+    net.connect(m, out, 0);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p && length(evalAt(*p, Vec3(0)).base - Vec3(1, 1.5f, 2)) < 1e-6f);
+    // mix by a smooth step of P.x: A on the left, B on the right
+    Node* gl = net.createNode("shglobals");
+    Node* sep = net.createNode("shdecompose");
+    net.connect(gl, sep, 0);
+    Node* st = net.createNode("shsmooth");
+    setF(st, "min", -0.01f); setF(st, "max", 0.01f);
+    net.connect(sep, st, 0);
+    Node* mix = net.createNode("shmix");
+    setP(mix, "a", Vec3(1, 0, 0)); setP(mix, "b", Vec3(0, 0, 1));
+    net.connect(st, mix, 2);
+    net.connect(mix, out, 0);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p && length(evalAt(*p, Vec3(-1, 0, 0)).base - Vec3(1, 0, 0)) < 1e-5f && length(evalAt(*p, Vec3(1, 0, 0)).base - Vec3(0, 0, 1)) < 1e-5f);
+    CHECK(p && length(evalAt(*p, Vec3(0)).base - Vec3(0.5f, 0, 0.5f)) < 1e-5f);
+    // a non-shading node in the network is an error that names it
+    Node* box = net.createNode("box");
+    net.connect(box, mix, 0);
+    CHECK(compileShader(net, 1, 24, err) == nullptr && err.find(box->name()) != std::string::npos);
+    net.disconnect(mix, 0);
+    // fit range
+    Node* fit = net.createNode("shfit");
+    setF(fit, "value", 5); setF(fit, "srcmin", 0); setF(fit, "srcmax", 10); setF(fit, "destmin", 1); setF(fit, "destmax", 3);
+    net.connect(fit, out, 1);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p && std::fabs(evalAt(*p, Vec3(0)).rough - 1.f) < 1e-6f); // 2, clamped to the roughness range
+    setF(fit, "destmax", 1.4f);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p && std::fabs(evalAt(*p, Vec3(0)).rough - 1.2f) > 0.1f && std::fabs(evalAt(*p, Vec3(0)).rough - 1.f) < 1e-6f);
+    // ramp: 0.25 between black at 0 and grey 0.5 at 0.5 (stops given out of order are sorted)
+    Node* ramp = net.createNode("shramp");
+    setF(ramp, "value", 0.25f);
+    setF(ramp, "pos1", 1); setP(ramp, "color1", Vec3(1));
+    setF(ramp, "pos3", 0); setP(ramp, "color3", Vec3(0));
+    net.connect(ramp, out, 0);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p && length(evalAt(*p, Vec3(0)).base - Vec3(0.25f)) < 1e-5f);
+    // checker cells alternate along each axis
+    Node* ch = net.createNode("shchecker");
+    setF(ch, "size", 0.25f);
+    net.connect(ch, out, 0);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p && length(evalAt(*p, Vec3(0.1f, 0.1f, 0.1f)).base - evalAt(*p, Vec3(0.35f, 0.1f, 0.1f)).base) > 0.5f);
+    CHECK(p && length(evalAt(*p, Vec3(0.1f, 0.1f, 0.1f)).base - evalAt(*p, Vec3(0.35f, 0.35f, 0.1f)).base) < 1e-6f);
+    // noise: deterministic, in range, and not constant
+    Node* nz = net.createNode("shnoise");
+    net.connect(nz, out, 0);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p != nullptr);
+    float lo = 1e9f, hi = -1e9f;
+    bool same = true, inRange = true;
+    for (int i = 0; i < 400; ++i) {
+        Vec3 P(float(i % 20) * 0.137f, float(i / 20) * 0.091f, 0.3f);
+        float v = evalAt(*p, P).base.x;
+        same = same && v == evalAt(*p, P).base.x;
+        inRange = inRange && v >= 0 && v <= 1;
+        lo = std::min(lo, v); hi = std::max(hi, v);
+    }
+    CHECK(same && inRange && hi - lo > 0.3f);
+    // voronoi cell colour: constant around a point, different far away; edges are 0 on a border-free cell centre... in range
+    Node* vo = net.createNode("shvoronoi");
+    vo->parm("output")->val[0] = 3; vo->touch();
+    net.connect(vo, out, 0);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p && length(evalAt(*p, Vec3(0.30f, 0.2f, 0.1f)).base - evalAt(*p, Vec3(0.301f, 0.2f, 0.1f)).base) < 1e-6f);
+    bool differs = false;
+    for (int i = 1; i < 10 && p; ++i) differs = differs || length(evalAt(*p, Vec3(0.3f, 0.2f, 0.1f)).base - evalAt(*p, Vec3(0.3f + float(i), 0.2f, 0.1f)).base) > 0.05f;
+    CHECK(differs);
+    // bound attributes, with their default when missing
+    Node* at = net.createNode("shattrib");
+    at->parm("name")->str = "temperature"; setP(at, "default", Vec3(0.7f));
+    net.connect(at, out, 0);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p && p->attribs.size() == 1 && p->attribs[0] == "temperature");
+    if (p) {
+        Vec3 val(0.1f, 0.2f, 0.3f);
+        ShaderInputs in; in.attribs = &val;
+        ShaderOutputs o; p->eval(in, o);
+        CHECK(length(o.base - val) < 1e-6f);
+        in.attribs = nullptr; p->eval(in, o);
+        CHECK(length(o.base - Vec3(0.7f)) < 1e-6f);
+    }
+    // bump: a pattern on the bump input tilts the normal (unit length), nothing on it leaves N alone
+    CHECK(p && length(evalAt(*p, Vec3(0.2f, 0.3f, 0.4f)).N - Vec3(0, 1, 0)) < 1e-6f);
+    Node* bn = net.createNode("shnoise");
+    setP(bn, "freq", Vec3(6));
+    net.connect(bn, out, 9);
+    setF(out, "bumpscale", 0.5f);
+    p = compileShader(net, 1, 24, err);
+    CHECK(p && p->oBump >= 0);
+    float tilt = 0;
+    for (int i = 0; i < 20 && p; ++i) {
+        Vec3 n = evalAt(*p, Vec3(float(i) * 0.173f, 0, float(i) * 0.071f)).N;
+        CHECK(std::fabs(length(n) - 1) < 1e-4f);
+        tilt = std::max(tilt, 1 - n.y);
+    }
+    CHECK(tilt > 0.01f);
+    // a Time node makes the network (and so the Material Builder) time dependent
+    Graph g;
+    Node* sp = g.createNode("sphere");
+    Node* mb = g.createNode("materialbuilder");
+    g.connect(sp, mb, 0);
+    CHECK(mb->subnet() && mb->subnet()->findNode("surface_output") && !mb->isTimeDependent());
+    Node* tm = mb->subnet()->createNode("shtime");
+    mb->subnet()->connect(tm, mb->subnet()->findNode("surface_output"), 5);
+    CHECK(mb->isTimeDependent());
+}
+
+TEST(material_builder) {
+    Graph g;
+    Node* box = g.createNode("box");
+    Node* col = g.createNode("color");
+    g.connect(box, col, 0);
+    Node* mb = g.createNode("materialbuilder");
+    g.connect(col, mb, 0);
+    Graph* net = mb->subnet();
+    Node* out = net->findNode("surface_output");
+    CHECK(out != nullptr);
+    if (!out) return;
+    setP(out, "basecolor", Vec3(0.1f, 0.6f, 0.2f));
+    setF(out, "rough", 0.25f);
+    g.cook(mb);
+    CHECK(mb->error().empty());
+    const Geometry& r = mb->geometry();
+    const Attrib* sh = r.findAttrib(AttribClass::Prim, "shader");
+    CHECK(sh && sh->getF(0) >= 1 && shaderById(int(sh->getF(0))) != nullptr);
+    // the viewport preview is baked onto the points; prim versions of the channels are gone
+    const Attrib* cd = r.findAttrib(AttribClass::Point, "Cd");
+    const Attrib* ro = r.findAttrib(AttribClass::Point, "rough");
+    CHECK(cd && ro && !r.findAttrib(AttribClass::Prim, "Cd"));
+    CHECK(cd && length(cd->getV(0) - Vec3(0.1f, 0.6f, 0.2f)) < 1e-5f);
+    CHECK(ro && std::fabs(ro->getF(0) - 0.25f) < 1e-6f);
+    // editing the network recooks the builder and keeps its shader id
+    const int id = sh ? int(sh->getF(0)) : 0;
+    setP(out, "basecolor", Vec3(0.9f, 0.1f, 0.1f));
+    g.cook(mb);
+    sh = mb->geometry().findAttrib(AttribClass::Prim, "shader");
+    CHECK(sh && int(sh->getF(0)) == id);
+    cd = mb->geometry().findAttrib(AttribClass::Point, "Cd");
+    CHECK(cd && length(cd->getV(0) - Vec3(0.9f, 0.1f, 0.1f)) < 1e-5f);
+    // the Cd global reads the colour from before the bake (kept in shadercd for the renderer)
+    Node* gl = net->createNode("shglobals");
+    gl->parm("global")->val[0] = 3; gl->touch();
+    net->connect(gl, out, 0);
+    g.cook(mb);
+    const Attrib* scd = mb->geometry().findAttrib(AttribClass::Point, "shadercd");
+    CHECK(scd != nullptr);
+    // a group limits it to some prims
+    mb->parm("group")->str = "0"; mb->touch();
+    g.cook(mb);
+    sh = mb->geometry().findAttrib(AttribClass::Prim, "shader");
+    CHECK(sh && sh->getF(0) >= 1 && sh->getF(1) == 0);
+    // errors inside surface on the node
+    Node* bad = net->createNode("box");
+    net->connect(bad, out, 1);
+    g.cook(mb);
+    CHECK(mb->error().find(bad->name()) != std::string::npos);
+    net->removeNode(bad);
+    // saved with the scene: the network round-trips
+    mb->parm("group")->str = ""; mb->touch();
+    g.setDisplayNode(mb);
+    Graph g2;
+    CHECK(g2.fromJson(g.toJson()));
+    Node* mb2 = g2.findNode(mb->name());
+    CHECK(mb2 && mb2->subnet() && mb2->subnet()->nodes().size() == net->nodes().size());
+    if (mb2) {
+        g2.cook(mb2);
+        CHECK(mb2->error().empty() && mb2->geometry().findAttrib(AttribClass::Prim, "shader"));
+    }
+}
+
+TEST(shader_render) {
+    // a shader-driven emission lights the camera directly: white x 2 under a black environment
+    Light black;
+    black.type = Light::Env; black.sky = false; black.intensity = 0; black.color = Vec3(1);
+    RenderSettings rs;
+    rs.width = 48; rs.height = 36; rs.samples = 16; rs.bounces = 4; rs.camDist = 4; rs.camPitch = 0; rs.camYaw = 0;
+    auto build = [](const std::function<void(Graph&, Node*)>& setup, bool pack = false) {
+        Graph g;
+        Node* sp = g.createNode("sphere");
+        sp->parm("rows")->val[0] = 48; sp->parm("cols")->val[0] = 96;
+        Node* nm = g.createNode("normal");
+        g.connect(sp, nm, 0);
+        Node* mb = g.createNode("materialbuilder");
+        g.connect(nm, mb, 0);
+        setup(*mb->subnet(), mb->subnet()->findNode("surface_output"));
+        Node* last = mb;
+        if (pack) { Node* pk = g.createNode("pack"); g.connect(mb, pk, 0); last = pk; }
+        g.cook(last);
+        CHECK(last->error().empty());
+        return last->geometry();
+    };
+    auto glow = [](Graph&, Node* out) { setP(out, "basecolor", Vec3(0)); setF(out, "emitstrength", 2); };
+    Vec3 c = centerMean(renderBuffers(build(glow), rs, {black}));
+    if (std::fabs(c.x - 2) > 0.1f) std::printf("  shader emission: %.3f %.3f %.3f\n", c.x, c.y, c.z);
+    CHECK(std::fabs(c.x - 2) < 0.1f && std::fabs(c.z - 2) < 0.1f);
+    // the same through a packed instance
+    c = centerMean(renderBuffers(build(glow, true), rs, {black}));
+    CHECK(std::fabs(c.x - 2) < 0.1f);
+    // glass from a shader passes the white furnace like the Material node's glass
+    Light env;
+    env.type = Light::Env; env.sky = false; env.intensity = 1; env.color = Vec3(1);
+    RenderSettings fr = rs;
+    fr.samples = 96; fr.bounces = 24;
+    c = centerMean(renderBuffers(build([](Graph&, Node* out) { setP(out, "basecolor", Vec3(1)); setF(out, "transmit", 1); setF(out, "rough", 0.02f); }), fr, {env}));
+    float l = (c.x + c.y + c.z) / 3;
+    if (l < 0.95f || l > 1.05f) std::printf("  shader glass furnace: %.3f\n", l);
+    CHECK(l >= 0.95f && l <= 1.05f);
+    // per-point patterns reach the render: red on -X, blue on +X
+    auto split = [](Graph& net, Node* out) {
+        Node* gl = net.createNode("shglobals");
+        Node* sep = net.createNode("shdecompose");
+        net.connect(gl, sep, 0);
+        Node* st = net.createNode("shsmooth");
+        setF(st, "min", -0.01f); setF(st, "max", 0.01f);
+        net.connect(sep, st, 0);
+        Node* mix = net.createNode("shmix");
+        setP(mix, "a", Vec3(1, 0, 0)); setP(mix, "b", Vec3(0, 0, 1));
+        net.connect(st, mix, 2);
+        net.connect(mix, out, 0);
+    };
+    PathTracer::Buffers b = renderBuffers(build(split), fr, {env});
+    auto px = [&](int x, int y) { size_t i = size_t(y) * size_t(b.w) + size_t(x); return Vec3(b.beauty[i * 3], b.beauty[i * 3 + 1], b.beauty[i * 3 + 2]); };
+    Vec3 a(0), d(0);
+    for (int y = b.h / 2 - 2; y <= b.h / 2 + 2; ++y) { a += px(b.w / 2 - 6, y); d += px(b.w / 2 + 6, y); }
+    CHECK((a.x > 2 * a.z) != (d.x > 2 * d.z)); // one side red, the other blue
+    CHECK(a.x > 2 * a.z ? d.z > 2 * d.x : a.z > 2 * a.x);
 }
 
 int main() {

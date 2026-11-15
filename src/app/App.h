@@ -72,6 +72,8 @@ public:
 
     // The network level being edited: the scene itself, or the inside of a subnet.
     Graph& net();
+    // The network whose display node is shown: net(), or inside a Material Builder the network around it.
+    Graph& viewNet();
     Node* current() { return net().findNode(currentId); }
     const std::vector<std::string>& netPath() const { return netPath_; }
     void diveInto(Node* subnetNode);

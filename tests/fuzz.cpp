@@ -11,6 +11,7 @@
 #include "core/Json.h"
 #include "core/Node.h"
 #include "core/Ops.h"
+#include "core/Shader.h"
 #include "core/Usd.h"
 #include <cstdio>
 #include <cstdlib>
@@ -177,6 +178,46 @@ int main(int argc, char** argv) {
             g.addPrim({0, 1, 2});
             runOverElements(g, AttribClass::Point, *prog, 1, 24, nullptr, err);
         });
+    // shader networks: bytes pick shading nodes, wiring and parameter values (huge, tiny, NaN-free extremes)
+    {
+        Bytes seed;
+        for (int i = 0; i < 96; ++i) seed.push_back(uint8_t(i * 37 + 11));
+        run("shader", seed, [](const Bytes& b) {
+            std::vector<const NodeType*> shading;
+            for (auto& t : nodeTypes()) if (t.category == "Shading") shading.push_back(&t);
+            size_t pos = 0;
+            auto next = [&]() -> uint32_t { return pos < b.size() ? b[pos++] : 0u; };
+            Graph g;
+            Node* sp = g.createNode("sphere");
+            sp->parm("rows")->val[0] = 6; sp->parm("cols")->val[0] = 8;
+            Node* mb = g.createNode("materialbuilder");
+            g.connect(sp, mb, 0);
+            Graph& net = *mb->subnet();
+            std::vector<Node*> made{net.findNode("surface_output")};
+            const int count = int(next() % 10);
+            for (int i = 0; i < count; ++i) made.push_back(net.createNode(shading[next() % shading.size()]->name));
+            static const float values[] = {0, 1, -1, 0.5f, 3, 1e-7f, 1e7f, -1e9f, 2e9f, 64, 1e30f, -0.0f};
+            for (Node* n : made)
+                for (auto& p : n->parms()) {
+                    if (next() % 3) continue;
+                    for (int c = 0; c < 3; ++c) p.val[c] = values[next() % (sizeof values / sizeof values[0])];
+                    if (p.def->type == ParmType::String) p.str = next() % 2 ? "Cd" : "nothing";
+                }
+            for (int i = 0; i < count * 2; ++i) {
+                Node* src = made[next() % made.size()];
+                Node* dst = made[next() % made.size()];
+                if (dst->inputs.empty()) continue;
+                net.connect(src, dst, int(next() % dst->inputs.size()));
+            }
+            g.cook(mb);
+            std::string err;
+            if (auto prog = compileShader(net, 1, 24, err)) {
+                ShaderInputs in;
+                ShaderOutputs o;
+                for (float x : {0.f, 1e9f, -3.5f}) { in.P = Vec3(x, 0.25f, -x); prog->eval(in, o); }
+            }
+        });
+    }
     for (const char* f : {"fz_seed.png", "fz_seed.exr", "fz_seed.hdr", "fz_case.png", "fz_case.exr", "fz_case.hdr", "fz_case.bvh", "fz_case.usda", "fz_case.obj"}) std::remove(f);
     std::printf("fuzz: %ld inputs, no crashes\n", total);
     return 0;

@@ -11,6 +11,7 @@
 #include "PathTracer.h"
 #include "Denoise.h"
 #include "Image.h"
+#include "Shader.h"
 #include "Volume.h"
 #include <algorithm>
 #include <functional>
@@ -35,6 +36,7 @@ struct MatInst {
     float rough = 0.5f, metal = 0, emit = 0, spec = 0.5f, transmit = 0, ior = 1.5f, sss = 0;
     Vec3 sssRadius{0.1f, 0.05f, 0.02f};
     int texBase = 0, texRough = 0, texMetal = 0, texNormal = 0;
+    int prog = -1; // shader network (index into Scene::progs); it then decides everything above
 };
 
 struct Tri {
@@ -45,12 +47,14 @@ struct Tri {
     Vec3 tangent; float bsign = 1;
     Vec3 m0, dm1, dm2; // motion over the shutter: vertex 0 displacement and the edge changes
     int mat = 0;
+    int attrOff = -1; // bound shader attributes: 3 vertices x Scene::shStride values
     bool moving = false;
 };
 struct Sphere {
     Vec3 c; float r;
     Vec3 col; Vec3 motion;
     int mat = 0;
+    int attrOff = -1;
     bool moving = false;
 };
 struct BvhNode {
@@ -383,6 +387,17 @@ struct Scene {
     std::vector<Tri> tris;
     std::vector<Sphere> spheres;
     std::vector<MatInst> mats;
+    // shader networks used here, and the attributes they read (shStride values per vertex)
+    struct ProgRef {
+        std::shared_ptr<const ShaderProgram> p;
+        std::vector<int> attr; // program attribute -> column, -1 = default
+        int cd = -1;           // column of "shadercd" (the colour before the viewport bake)
+        bool transmissive = false;
+    };
+    std::vector<ProgRef> progs;
+    std::vector<std::string> shAttrNames;
+    std::vector<Vec3> shAttr;
+    int shStride = 0;
     std::vector<int> order; // prim ids: < tris.size() is a triangle, otherwise a sphere
     std::vector<BvhNode> nodes;
     std::vector<Volume> vols;
@@ -533,13 +548,70 @@ struct Scene {
         MatAttr aRough = ma("rough", 0.65f), aMetal = ma("metal", 0.f), aEmit = ma("emit", 0.f), aSpec = ma("spec", 0.5f), aTrans = ma("transmit", 0.f),
                 aIor = ma("ior", 1.5f), aSss = ma("sss", 0.f), aBase = ma("basemap", 0.f), aRmap = ma("roughmap", 0.f), aMmap = ma("metalmap", 0.f),
                 aNmap = ma("normalmap", 0.f);
-        const Attrib* qSssR = g.findAttrib(AttribClass::Prim, "sssradius");
-        const Attrib* pSssR = g.findAttrib(AttribClass::Point, "sssradius");
         auto val = [](const MatAttr& a, int prim, int pt) {
             if (a.prim && prim >= 0) return a.prim->getF(size_t(prim));
             if (a.point && pt >= 0) return a.point->getF(size_t(pt));
             return a.def;
         };
+        MatAttr aShader = ma("shader", 0.f);
+        std::unordered_map<int, int> shaderMat; // shader id -> material
+        if (aShader.prim || aShader.point) {
+            // collect the programs first: their bound attributes become per-vertex columns
+            std::vector<int> ids;
+            auto note = [&](float f) { int id = int(f + 0.5f); if (id > 0 && std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id); };
+            if (aShader.prim) for (size_t i = 0; i < g.numPrims(); ++i) note(aShader.prim->getF(i));
+            if (aShader.point) for (size_t i = 0; i < g.numPoints(); ++i) note(aShader.point->getF(i));
+            bool anyCd = false;
+            for (int id : ids) {
+                auto prog = shaderById(id);
+                if (!prog) { warnings += "Unknown shader id " + std::to_string(id) + " (recook the Material Builder).\n"; continue; }
+                ProgRef pr;
+                pr.p = prog;
+                for (auto& name : prog->attribs) {
+                    if (!g.findAttrib(AttribClass::Point, name) && !g.findAttrib(AttribClass::Prim, name)) { pr.attr.push_back(-1); continue; }
+                    auto it = std::find(shAttrNames.begin(), shAttrNames.end(), name);
+                    pr.attr.push_back(int(it - shAttrNames.begin()));
+                    if (it == shAttrNames.end()) shAttrNames.push_back(name);
+                }
+                anyCd |= prog->usesCd;
+                const int tr = prog->oTransmit;
+                pr.transmissive = tr >= 0 && (prog->init[size_t(tr)].x > 0 ||
+                                              std::any_of(prog->code.begin(), prog->code.end(), [tr](const ShaderProgram::Ins& in) { return in.dst == tr; }));
+                progs.push_back(std::move(pr));
+                MatInst m;
+                m.prog = int(progs.size()) - 1;
+                mats.push_back(m);
+                shaderMat[id] = int(mats.size()) - 1;
+            }
+            if (anyCd && g.findAttrib(AttribClass::Point, "shadercd")) {
+                shAttrNames.push_back("shadercd");
+                for (auto& pr : progs) if (pr.p->usesCd) pr.cd = int(shAttrNames.size()) - 1;
+            }
+            shStride = int(shAttrNames.size());
+        }
+        std::vector<const Attrib*> colPt(size_t(shStride), nullptr), colPrim(size_t(shStride), nullptr);
+        for (int k = 0; k < shStride; ++k) {
+            colPt[size_t(k)] = g.findAttrib(AttribClass::Point, shAttrNames[size_t(k)]);
+            colPrim[size_t(k)] = g.findAttrib(AttribClass::Prim, shAttrNames[size_t(k)]);
+        }
+        // appends the bound attribute values of these points (prim attributes are constant per prim)
+        auto pushAttrs = [&](int prim, std::initializer_list<int> pts) {
+            if (!shStride) return -1;
+            int off = int(shAttr.size());
+            for (int pt : pts)
+                for (int k = 0; k < shStride; ++k) {
+                    const Attrib* a = colPt[size_t(k)] && pt >= 0 ? colPt[size_t(k)] : nullptr;
+                    shAttr.push_back(a ? a->getV(size_t(pt)) : colPrim[size_t(k)] && prim >= 0 ? colPrim[size_t(k)]->getV(size_t(prim)) : Vec3(0));
+                }
+            return off;
+        };
+        auto shaderOf = [&](int prim, int pt) {
+            int id = int(val(aShader, prim, pt) + 0.5f);
+            auto it = id > 0 ? shaderMat.find(id) : shaderMat.end();
+            return it == shaderMat.end() ? -1 : it->second;
+        };
+        const Attrib* qSssR = g.findAttrib(AttribClass::Prim, "sssradius");
+        const Attrib* pSssR = g.findAttrib(AttribClass::Point, "sssradius");
         const Vec3 defCol = toLinear(Vec3(0.72f, 0.74f, 0.78f));
         auto colorOf = [&](int prim, int pt) {
             if (pCd) return toLinear(pCd->getV(size_t(pt)));
@@ -548,6 +620,7 @@ struct Scene {
         };
         std::unordered_map<std::string, int> matIndex;
         auto matFor = [&](int prim, int pt, bool hasBaseColorAttr) {
+            if (int sm = shaderOf(prim, pt); sm >= 0) return sm;
             MatInst m;
             m.rough = std::clamp(val(aRough, prim, pt), 0.02f, 1.f);
             m.metal = std::clamp(val(aMetal, prim, pt), 0.f, 1.f);
@@ -603,6 +676,7 @@ struct Scene {
                     t.c0 = baseCol(int(pi), a); t.c1 = baseCol(int(pi), b); t.c2 = baseCol(int(pi), c);
                     t.uv0 = uvOf(a); t.uv1 = uvOf(b); t.uv2 = uvOf(c);
                     t.mat = mat;
+                    if (mats[size_t(mat)].prog >= 0) t.attrOff = pushAttrs(int(pi), {a, b, c});
                     if (pV) {
                         Vec3 ma0 = motionOf(a), mb = motionOf(b), mc = motionOf(c);
                         t.m0 = ma0; t.dm1 = mb - ma0; t.dm2 = mc - ma0;
@@ -637,6 +711,7 @@ struct Scene {
             sp.r = std::max(1e-5f, ps ? ps->getF(i) : 0.02f);
             sp.col = pCd ? toLinear(pCd->getV(i)) : toLinear(Vec3(0.95f, 0.85f, 0.35f));
             sp.mat = matFor(-1, int(i), anyColor);
+            if (mats[size_t(sp.mat)].prog >= 0) sp.attrOff = pushAttrs(-1, {int(i)});
             if (pV) { sp.motion = motionOf(int(i)); sp.moving = dot(sp.motion, sp.motion) > 1e-14f; }
             spheres.push_back(sp);
         }
@@ -1132,11 +1207,43 @@ struct Scene {
     struct SurfacePt {
         Vec3 pos, n, ng; // n: shading normal on the incoming side; ng: geometric normal on that side
         Vec3 base{0.5f};
-        float rough = 0.5f, metal = 0;
+        float rough = 0.5f, metal = 0, spec = 0.5f, transmit = 0, ior = 1.5f, sss = 0;
+        Vec3 emission{0}; // linear radiance
         const MatInst* m = nullptr;
         bool front = true;
         bool closed = true;
+        void fromMat(const MatInst& mm) {
+            m = &mm;
+            rough = mm.rough; metal = mm.metal; spec = mm.spec; transmit = mm.transmit; ior = mm.ior; sss = mm.sss;
+        }
     };
+
+    // Runs a shader network at a shading point (P, N, uv in this scene's space). attrs: the interpolated
+    // bound attributes (shStride values) or nullptr. n is updated with the bumped normal.
+    void runShader(const MatInst& m, SurfacePt& s, const Vec3& P, Vec3& n, const Vec3& uv, const Vec3* attrs) const {
+        const ProgRef& pr = progs[size_t(m.prog)];
+        ShaderInputs in;
+        in.P = P; in.N = n; in.uv = uv;
+        in.Cd = pr.cd >= 0 && attrs ? attrs[pr.cd]
+                                    : Vec3(std::pow(std::max(s.base.x, 0.f), 1 / 2.2f), std::pow(std::max(s.base.y, 0.f), 1 / 2.2f),
+                                           std::pow(std::max(s.base.z, 0.f), 1 / 2.2f));
+        in.frame = set.frame;
+        in.time = set.frame / std::max(1e-3f, set.fps);
+        Vec3 bound[16];
+        const size_t na = std::min<size_t>(pr.p->attribs.size(), 16);
+        for (size_t k = 0; k < na; ++k) {
+            int col = pr.attr[k];
+            bound[k] = col >= 0 && attrs ? attrs[col] : pr.p->attribDefaults[k];
+        }
+        in.attribs = na ? bound : nullptr;
+        ShaderOutputs o;
+        pr.p->eval(in, o);
+        s.base = toLinear(o.base);
+        s.rough = std::clamp(o.rough, 0.02f, 1.f);
+        s.metal = o.metal; s.spec = o.spec; s.transmit = o.transmit; s.ior = o.ior; s.sss = o.sss;
+        s.emission = toLinear(o.emitColor) * o.emitStrength;
+        if (dot(o.N, o.N) > 0.5f) n = normalize(o.N);
+    }
 
     void shade(const Ray& ray, const Hit& h, bool groundHit, SurfacePt& s) const {
         if (!groundHit && h.inst >= 0) {
@@ -1149,20 +1256,23 @@ struct Scene {
             s.ng = in.xf.transformNormal(s.ng);
             if (dot(s.ng, ray.d) > 0) s.ng = -s.ng; // keep both on the incoming side (sign is invariant; guards rounding)
             if (dot(s.n, ray.d) > 0) s.n = s.ng;
-            s.base = instanceTint(h, s.base, s.m && s.m->texBase > 0);
+            if (!s.m || s.m->prog < 0) {
+                s.base = instanceTint(h, s.base, s.m && s.m->texBase > 0);
+                if (s.m) s.emission = s.base * s.m->emit;
+            }
             return;
         }
         s.pos = ray.o + ray.d * h.t;
         static const MatInst groundMat = [] { MatInst m; m.rough = 0.9f; return m; }();
         if (groundHit) {
             s.n = s.ng = Vec3(0, 1, 0);
-            s.base = Vec3(0.18f); s.rough = 0.9f; s.metal = 0; s.m = &groundMat; s.front = true;
+            s.fromMat(groundMat); s.base = Vec3(0.18f); s.front = true;
             return;
         }
         if (h.prim < int(tris.size())) {
             const Tri& t = tris[size_t(h.prim)];
             const MatInst& m = mats[size_t(t.mat)];
-            s.m = &m;
+            s.fromMat(m);
             Vec3 p0, e1, e2;
             triAt(t, ray.time, p0, e1, e2);
             float w = 1 - h.u - h.v;
@@ -1173,7 +1283,20 @@ struct Scene {
             if (dot(n, gn) < 0) n = -n;
             Vec3 uv = t.uv0 * w + t.uv1 * h.u + t.uv2 * h.v;
             s.base = t.c0 * w + t.c1 * h.u + t.c2 * h.v;
-            s.rough = m.rough; s.metal = m.metal;
+            if (m.prog >= 0) {
+                Vec3 attrs[17];
+                const Vec3* ap = nullptr;
+                if (t.attrOff >= 0 && shStride > 0 && shStride <= 17) {
+                    const Vec3* a0 = &shAttr[size_t(t.attrOff)];
+                    for (int k = 0; k < shStride; ++k) attrs[k] = a0[k] * w + a0[shStride + k] * h.u + a0[2 * shStride + k] * h.v;
+                    ap = attrs;
+                }
+                runShader(m, s, s.pos, n, uv, ap);
+                if (dot(n, gn) < 0) n = n - gn * (2 * dot(n, gn)); // bump tilted past the surface: mirror back
+                if (dot(n, ray.d) > 0) n = gn;
+                s.n = n; s.ng = gn;
+                return;
+            }
             float tx[4];
             if (const Texture* tb = m.texBase ? tex(m.texBase, true) : nullptr) { tb->sample(uv.x, uv.y, tx); s.base = s.base * Vec3(tx[0], tx[1], tx[2]); }
             if (const Texture* tr = m.texRough ? tex(m.texRough, false) : nullptr) { tr->sample(uv.x, uv.y, tx); s.rough = std::clamp(tx[0], 0.02f, 1.f); }
@@ -1187,18 +1310,25 @@ struct Scene {
                     if (dot(mapped, mapped) > 0.5f) n = mapped;
                 }
             }
+            s.emission = s.base * m.emit;
             if (dot(n, ray.d) > 0) n = gn; // shading normal faces away: fall back to the geometric one
             s.n = n; s.ng = gn;
         } else {
             const Sphere& sp = spheres[size_t(h.prim) - tris.size()];
             const MatInst& m = mats[size_t(sp.mat)];
-            s.m = &m;
+            s.fromMat(m);
             Vec3 c = sp.moving ? sp.c + sp.motion * ray.time : sp.c;
             Vec3 n = normalize(s.pos - c);
             s.front = dot(n, ray.d) < 0;
             if (!s.front) n = -n;
             s.n = s.ng = n;
-            s.base = sp.col; s.rough = m.rough; s.metal = m.metal;
+            s.base = sp.col;
+            if (m.prog >= 0) {
+                const Vec3* ap = sp.attrOff >= 0 && shStride > 0 ? &shAttr[size_t(sp.attrOff)] : nullptr;
+                Vec3 nb = n;
+                runShader(m, s, s.pos, nb, Vec3(0), ap);
+                if (dot(nb, ray.d) < 0) s.n = nb;
+            } else s.emission = s.base * m.emit;
         }
     }
 
@@ -1206,16 +1336,16 @@ struct Scene {
         Bsdf b;
         b.base = s.base;
         b.metal = s.metal;
-        b.transmit = s.m->transmit;
-        b.sss = s.m->sss;
-        b.eta = s.front ? s.m->ior : 1.f / s.m->ior;
+        b.transmit = s.transmit;
+        b.sss = s.sss;
+        b.eta = s.front ? s.ior : 1.f / s.ior;
         b.g.a = std::max(1e-4f, s.rough * s.rough);
-        b.F0d = Vec3(0.08f * s.m->spec);
+        b.F0d = Vec3(0.08f * s.spec);
         return b;
     }
 
     bool anyTransmissive() const {
-        for (auto& m : mats) if (m.transmit > 0 && m.metal < 1) return true;
+        for (auto& m : mats) if ((m.prog < 0 && m.transmit > 0 && m.metal < 1) || (m.prog >= 0 && progs[size_t(m.prog)].transmissive)) return true;
         for (auto& pr : protos) if (pr->anyTransmissive()) return true;
         return false;
     }
@@ -1238,9 +1368,18 @@ struct Scene {
                 if (!intersect(sr, sh, false)) break;
                 const Scene& sc = sceneOf(sh);
                 const MatInst& m = sc.mats[size_t(sc.primMat(sh.prim))];
-                float tr = m.transmit * (1 - m.metal);
+                float tr;
+                Vec3 tint;
+                if (m.prog >= 0) {
+                    SurfacePt ss;
+                    shade(sr, sh, false, ss);
+                    tr = ss.transmit * (1 - ss.metal);
+                    tint = ss.base;
+                } else {
+                    tr = m.transmit * (1 - m.metal);
+                    tint = instanceTint(sh, sc.primColor(sh), m.texBase > 0);
+                }
                 if (tr <= 0) return Vec3(0);
-                Vec3 tint = instanceTint(sh, sc.primColor(sh), m.texBase > 0);
                 T = T * tint * tr;
                 if (maxc(T) < 1e-3f) return Vec3(0);
                 o = o + d * (sh.t + 1e-4f);
@@ -1376,7 +1515,7 @@ struct Scene {
             SurfacePt s;
             shade(ray, h, groundHit, s);
             if (aov && bounce == 0) { aov->albedo = s.base; aov->normal = s.n; aov->depth = h.t; aov->alpha = 1; }
-            if (s.m->emit > 0 && !groundHit) L += beta * s.base * s.m->emit;
+            if (!groundHit && (s.emission.x > 0 || s.emission.y > 0 || s.emission.z > 0)) L += beta * s.emission;
 
             const float tScale = std::max(1.f, h.t);
             Vec3 tt, bt;

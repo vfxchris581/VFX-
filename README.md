@@ -11,13 +11,14 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 ## Features
 
 - **Network editor.** Nodes flow top to bottom as in Houdini. Press **Tab** (or right-click) to open a searchable node menu. Drag from an output to an input to connect; drag a wire onto empty space to add a node that's already connected. The **blue flag** sets the display node and the **yellow flag** bypasses a node. Also: box select, duplicate, rename, error badges and per-node cook stats.
-- **74 nodes**:
+- **102 node types**:
   - Generators: Box, Sphere, Grid, Tube, Torus, Circle, Line, File (OBJ)
   - Modifiers: Transform, Merge, Subdivide (Catmull-Clark), PolyExtrude, Fuse, Facet, Reverse, Blast, PolyWire
   - Deformers: Mountain (fractal noise), Smooth, Peak, Point Jitter
   - Scene: **Ground Plane** (a checker floor that is always shown in the viewport and renders, whichever node is displayed; Create shelf)
   - Points: Scatter (area weighted), Copy to Points (orients to `N`/`up`, scales by `pscale`/`scale`, transfers `Cd`, optional Pack and Instance), Pack, Unpack
-  - Attributes: Attribute Wrangle, Attribute Create, Color, Normal, Material, UV Project
+  - Attributes: Attribute Wrangle, Attribute Create, Color, Normal, Material, **Material Builder**, UV Project
+  - Shading (inside a Material Builder): Shader Output, Global Variables, Time, Constant Color/Float, Bind Attribute, Math, Function, Mix, Fit Range, Clamp, Smooth Step, Noise, Voronoi, Checker, Color Ramp, Texture, Combine XYZ, Separate, Random, Wave
   - Utility: Null, Switch, Subnetwork, Subnet Input, Output, Time Shift
   - Lights and Cameras: Camera, Point Light, Spot Light, Area Light, Distant Light, Environment Light
   - Simulation: POP Solver, Trail, Pyro Solver
@@ -48,6 +49,7 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 - **USD.** **File → Export → USD (.usda)** writes the displayed node as a USD stage: a mesh with normals, colours and uvs, UsdPreviewSurface materials (with their texture maps, one GeomSubset per material), curves and points, the scene's cameras and lights (UsdLux, including the HDRI dome), and time-sampled animation over the timeline. Import (or a File node) reads meshes, curves and points from `.usda` files. `hdc usd scene.hdg out.usda --frames 1 48` does it from the command line.
 - **Render View.** A progressive CPU path tracer renders the displayed node from the Scene View camera or a camera node.
   - **Materials** (Material node) follow a principled model: base color, roughness, metallic, specular, glow, **transmission** (glass and water: rough or smooth refraction with exact Fresnel and an index of refraction), and **subsurface scattering** (a random walk inside closed meshes, with a per-channel scatter distance, for wax, skin and marble). Reflections use GGX microfacets with visible-normal sampling.
+  - **Shader networks** (Material Builder): build a surface from Shading nodes (noise, Voronoi cells, waves, checkers, ramps, textures, maths, bound attributes) wired into a principled Shader Output, as with Houdini's material builder. The Render View evaluates the network at every shading point, with bump mapping; the viewport shows it baked onto the points.
   - **Texture maps**: base color, roughness, metallic and tangent-space normal maps from PNG, OpenEXR or Radiance HDR files, read through the `uv` attribute. **UV Project** makes planar, box, cylindrical or spherical uvs. Put `<UDIM>` in a file name for UDIM tiles, and `$HIP` at the start of a path for the scene's folder.
   - **Lighting**: point, spot, area, distant, sky and environment lights. An Environment Light can use an **HDRI** (lat-long .hdr or .exr), which is importance sampled and combined with BSDF sampling by multiple importance sampling. Glass casts tinted shadows.
   - **Camera**: thin-lens **depth of field** (f-stop and focus distance, in Render Settings or per camera node) and **motion blur** from the `v` attribute, which RBD, FLIP, POP and Vellum all output.
@@ -73,6 +75,8 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 ![FLIP dam break, Vellum cloth over a ball, and the ocean](docs/screenshot-fluids-vellum.png)
 
 ![Glass, gold, subsurface wax and a textured, normal-mapped box under an HDRI (examples/materials.hdg)](docs/screenshot-materials.png)
+
+![Marble, wood, rusted metal, tiles and lava, each a Material Builder shader network (examples/shaders.hdg)](docs/screenshot-shaders.png)
 
 ![IK-driven skinned arm, BVH motion capture, and a composite (rig, mocap and comp examples)](docs/screenshot-rig-comp.png)
 
@@ -197,7 +201,7 @@ Main calls: `hd.node(name)`, `hd.nodes()`, `hd.createNode(type, name)`, `hd.node
 
 ## Examples
 
-`examples/` contains `terrain`, `ripples` (animated), `city`, `sculpt`, `molecule`, the keyframed `bounce`, the particle scenes `sparks` and `vortex`, the pyro scenes `smoke` and `fire`, `destruction` (a ball breaking a wall), `dambreak` (FLIP), `cloth` (Vellum), `ocean`, and `materials` (glass, gold, wax and a textured box under an HDRI; textures in `examples/assets`), `rig` (a skinned arm following an IK target), `mocap` (a BVH clip) and `comp` (a render graded, glowed and defocused over a background), `forest` (12,000 packed trees) and `wreckingball` (RBD constraints). `examples/scripts` has Python scripts. Press Play for the simulations. The same scenes are available inside the app under **File → Open Example**.
+`examples/` contains `terrain`, `ripples` (animated), `city`, `sculpt`, `molecule`, the keyframed `bounce`, the particle scenes `sparks` and `vortex`, the pyro scenes `smoke` and `fire`, `destruction` (a ball breaking a wall), `dambreak` (FLIP), `cloth` (Vellum), `ocean`, and `materials` (glass, gold, wax and a textured box under an HDRI; textures in `examples/assets`), `rig` (a skinned arm following an IK target), `mocap` (a BVH clip) and `comp` (a render graded, glowed and defocused over a background), `forest` (12,000 packed trees), `wreckingball` (RBD constraints) and `shaders` (marble, wood, rust, tiles and lava built as shader networks). `examples/scripts` has Python scripts. Press Play for the simulations. The same scenes are available inside the app under **File → Open Example**.
 
 ## Command line (`hdc`)
 

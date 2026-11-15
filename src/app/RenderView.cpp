@@ -8,13 +8,15 @@
 namespace hd {
 
 void App::startRender() {
-    Node* d = net().displayNode();
+    Graph& vn = viewNet();
+    Node* d = vn.displayNode();
     if (!d) { status("Nothing to render: no display node", true); return; }
-    net().cook(d);
+    vn.cook(d);
     if (!d->error().empty()) { status("Cannot render: " + d->name() + " has an error", true); return; }
     syncCameraToScene();
     RenderSettings rs = graph.render;
     rs.fps = graph.fps;
+    rs.frame = graph.frame;
     for (auto& cam : collectCameras(graph, graph.frame)) {
         if (cam.name != rs.cameraName) continue; // rendering through a camera node: its position, lens and resolution
         rs.useEye = true; rs.camEye = cam.eye; rs.camTarget = cam.eye + cam.fwd;
@@ -24,8 +26,8 @@ void App::startRender() {
         if (cam.dof) { rs.dof = true; rs.fstop = cam.fstop; rs.focusDist = cam.focus; }
     }
     Geometry scene;
-    if (sceneGeometry(graph, &net() == &graph ? d : nullptr, true, scene) > 0) rs.ground = false; // the Ground Plane replaces the built-in ground
-    if (&net() != &graph) { scene.merge(d->geometry()); } // display inside a subnet: sceneGeometry got only the planes
+    if (sceneGeometry(graph, &vn == &graph ? d : nullptr, true, scene) > 0) rs.ground = false; // the Ground Plane replaces the built-in ground
+    if (&vn != &graph) { scene.merge(d->geometry()); } // display inside a subnet: sceneGeometry got only the planes
     tracer_.start(scene, rs, collectLights(graph, graph.frame));
     std::string warn = tracer_.warnings();
     if (!warn.empty()) status("Render: " + warn.substr(0, warn.find('\n')), true);

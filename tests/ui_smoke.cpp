@@ -168,6 +168,30 @@ int main(int argc, char** argv) {
         if (app.renderer.stats().triangles < before->geometry().numPrims() + 1000) { std::printf("FAIL ground plane not drawn\n"); ++failures; }
         save("ground_plane");
     }
+    // Material Builder: diving in shows the shader network while the viewport keeps showing the scene,
+    // and the Shading shelf adds pattern nodes into the network
+    {
+        app.loadScene(exDir + "/shaders.hdg");
+        for (int i = 0; i < 3; ++i) runFrame();
+        hd::Node* mb = app.graph.findNode("rust");
+        if (!mb || !mb->subnet()) { std::printf("FAIL shaders.hdg: no rust material builder\n"); ++failures; }
+        else {
+            const size_t tris = app.renderer.stats().triangles;
+            app.diveInto(mb);
+            for (int i = 0; i < 3; ++i) runFrame();
+            runFrame(); runFrame();
+            if (app.renderer.stats().triangles != tris) { std::printf("FAIL viewport changed inside the material builder (%zu vs %zu)\n", app.renderer.stats().triangles, tris); ++failures; }
+            const size_t before = mb->subnet()->nodes().size();
+            app.shelfTool("shvoronoi");
+            for (int i = 0; i < 3; ++i) runFrame();
+            if (mb->subnet()->nodes().size() != before + 1) { std::printf("FAIL shading shelf tool\n"); ++failures; }
+            app.graph.cook(mb);
+            if (!mb->error().empty()) { std::printf("FAIL rust: %s\n", mb->error().c_str()); ++failures; }
+            save("shader_network");
+            app.goToLevel(0);
+            for (int i = 0; i < 3; ++i) runFrame();
+        }
+    }
     // an empty scene: what you see when you start modelling (the reference grid on its own)
     app.newScene(false);
     for (int i = 0; i < 4; ++i) runFrame();

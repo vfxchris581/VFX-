@@ -1,6 +1,7 @@
 #include "App.h"
 #include <imgui.h>
 #include <algorithm>
+#include <iterator>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -368,7 +369,8 @@ void NetworkEditor::draw(App& app) {
                 else if (n->cookStamp() && !n->geometry().volumes.empty() && n->geometry().numPoints() == 0) {
                     const Volume& vol = n->geometry().volumes[0];
                     std::snprintf(info, sizeof info, "%dx%dx%d vox  %.0f ms", vol.nx, vol.ny, vol.nz, n->cookTimeMs());
-                } else if (n->cookStamp()) std::snprintf(info, sizeof info, "%zu pts  %.1f ms", n->geometry().numPoints(), n->cookTimeMs());
+                } else if (n->type().category == "Shading") info[0] = 0; // shading nodes make no geometry
+                else if (n->cookStamp()) std::snprintf(info, sizeof info, "%zu pts  %.1f ms", n->geometry().numPoints(), n->cookTimeMs());
                 else info[0] = 0;
                 dl->AddText(font, fs * 0.82f, ImVec2(np.x, np.y + fs * 1.05f), n->error().empty() ? IM_COL32(140, 142, 148, 255) : IM_COL32(240, 90, 90, 255), info);
             }
@@ -498,7 +500,12 @@ void NetworkEditor::drawNodeMenu(App& app) {
 
     std::vector<const NodeType*> matches;
     static const char* cats[] = {"Generators", "Modifiers", "Deformers", "Attributes", "Points", "Volumes", "Simulation", "Destruction", "Fluids", "Vellum", "Rigging", "Compositing", "Lights and Cameras", "Utility"};
-    for (const char* cat : cats)
+    static const char* shadingCats[] = {"Shading"};
+    // a Material Builder's network holds Shading nodes only; everywhere else they are hidden
+    const bool shading = app.net().owner() && app.net().owner()->type().name == "materialbuilder";
+    std::vector<const char*> catList = shading ? std::vector<const char*>(std::begin(shadingCats), std::end(shadingCats))
+                                               : std::vector<const char*>(std::begin(cats), std::end(cats));
+    for (const char* cat : catList)
         for (auto& t : nodeTypes())
             if (t.category == cat && (icontains(t.label, search_) || icontains(t.name, search_))) matches.push_back(&t);
     std::vector<std::string> assetMatches;

@@ -5,7 +5,14 @@ what works, what is partial and what is planned.
 
 ## 0.7.0
 
-Phases 8 to 11: installers and releases, packed primitives and instancing, rigid-body constraints, Python scripting, plus new simulation and viewport features.
+Phases 8 to 12: installers and releases, packed primitives and instancing, rigid-body constraints, Python scripting, node-based shaders, plus new simulation and viewport features.
+
+### Shader networks (Phase 12)
+
+- Material Builder node: a surface shader built from Shading nodes, like Houdini's material builder with VOPs. Double-click (or "Edit Shader Network") to edit it; inside, the Tab menu and the Shading shelf offer only shading nodes and the viewport keeps showing the scene.
+- 21 Shading nodes: Shader Output (principled: base colour, roughness, metallic, specular, emission, transmission, IOR, subsurface, bump), Global Variables (P, N, uv, Cd), Time, Constant Color/Float, Bind Attribute, Math, Function, Mix, Fit Range, Clamp, Smooth Step, Noise (Perlin, fBm, turbulence, ridged, vector), Voronoi (distance, edges, cell value/colour), Checker, Color Ramp, Texture (PNG/EXR/HDR, UDIM), Combine XYZ, Separate, Random, Wave (bands, rings; sine, saw, triangle; noise distortion).
+- The Render View runs the network at every shading point, including packed instances, shadows through shader glass and bump mapping. The viewport shows it baked onto the points.
+- New example: `shaders.hdg` (marble, wood, rusted metal, tiles, glowing lava).
 
 ### Modelling aids
 

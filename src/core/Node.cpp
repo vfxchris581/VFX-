@@ -244,6 +244,13 @@ Node* Graph::createNode(const std::string& typeName, float x, float y, const std
         Node* out = n->sub_->createNode("output", 0, 110);
         n->sub_->connect(in, out, 0);
         n->sub_->setDisplayNode(out);
+    } else if (t->name == "materialbuilder") {
+        n->sub_ = std::make_unique<Graph>();
+        n->sub_->parent_ = this;
+        n->sub_->owner_ = n;
+        // starts with the output; patterns get wired into it
+        Node* out = n->sub_->createNode("principledshader", 0, 110, "surface_output");
+        n->sub_->setDisplayNode(out);
     }
     return n;
 }

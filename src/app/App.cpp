@@ -104,6 +104,12 @@ Graph& App::net() {
     return *g;
 }
 
+Graph& App::viewNet() {
+    Graph* g = &net();
+    while (g->owner() && g->owner()->type().name == "materialbuilder" && g->parent()) g = g->parent();
+    return *g;
+}
+
 void App::diveInto(Node* sn) {
     if (!sn || !sn->subnet()) return;
     netPath_.push_back(sn->name());
@@ -333,7 +339,7 @@ void App::status(const std::string& msg, bool error) {
 }
 
 void App::frameGeometry() {
-    Node* d = net().displayNode();
+    Node* d = viewNet().displayNode();
     if (!d || d->geometry().empty()) { camera.home(); return; }
     Vec3 mn, mx;
     d->geometry().bounds(mn, mx);
@@ -355,10 +361,12 @@ void App::cookDisplay() {
             g = sub;
         }
     }
-    Node* d = net().displayNode();
-    if (d) net().cook(d);
+    // inside a Material Builder the network is a shader: show the scene around it
+    Graph& vn = viewNet();
+    Node* d = vn.displayNode();
+    if (d) vn.cook(d);
     // Ground Plane nodes (top level) are always shown, like lights: add them to what is displayed
-    std::vector<Node*> planes = groundPlanes(graph, &net() == &graph ? d : nullptr, false);
+    std::vector<Node*> planes = groundPlanes(graph, &vn == &graph ? d : nullptr, false);
     if (planes.empty()) {
         if (!d) { renderer.clearGeometry(); return; }
         renderer.setGeometry(d->geometry(), d->cookStamp());
@@ -369,8 +377,8 @@ void App::cookDisplay() {
         if (stamp != groundStamp_) {
             groundStamp_ = stamp;
             Geometry shown;
-            sceneGeometry(graph, &net() == &graph ? d : nullptr, false, shown);
-            if (d && &net() != &graph) shown.merge(d->geometry()); // display inside a subnet
+            sceneGeometry(graph, &vn == &graph ? d : nullptr, false, shown);
+            if (d && &vn != &graph) shown.merge(d->geometry()); // display inside a subnet
             renderer.setGeometry(shown, stamp);
         }
         if (!d) return;
@@ -534,7 +542,7 @@ void App::openFileDialog(FileDialogMode mode) {
         std::string stem = currentFile_.empty() ? "scene" : fs::path(currentFile_).stem().string();
         std::snprintf(fileName_, sizeof fileName_, "%s.usda", stem.c_str());
     } else if (mode == FileDialogMode::ExportObj) {
-        std::snprintf(fileName_, sizeof fileName_, "%s.obj", net().displayNode() ? net().displayNode()->name().c_str() : "export");
+        std::snprintf(fileName_, sizeof fileName_, "%s.obj", viewNet().displayNode() ? viewNet().displayNode()->name().c_str() : "export");
     }
     if (fileDir_.empty() || !fs::exists(fileDir_)) fileDir_ = fs::current_path().string();
 }
@@ -642,7 +650,7 @@ void App::drawFileDialog() {
         case FileDialogMode::SaveAs: saveScene(chosen); break;
         case FileDialogMode::ImportObj: openPath(chosen); break;
         case FileDialogMode::ExportObj: {
-            Node* d = net().displayNode();
+            Node* d = viewNet().displayNode();
             bool ok = false;
             if (d) {
                 std::string ext = fs::path(chosen).extension().string();
@@ -676,7 +684,7 @@ void App::drawFileDialog() {
             break;
         }
         case FileDialogMode::ExportUsd: {
-            Node* d = net().displayNode();
+            Node* d = viewNet().displayNode();
             bool ok = false;
             if (d) {
                 UsdExport ue;
