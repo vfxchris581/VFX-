@@ -14,13 +14,49 @@ Vec3 Camera::eye() const {
     float p = radians(pitch), y = radians(yaw);
     return target + Vec3(std::cos(p) * std::sin(y), std::sin(p), std::cos(p) * std::cos(y)) * dist;
 }
-Mat4 Camera::view() const { return Mat4::lookAt(eye(), target, Vec3(0, 1, 0)); }
+Mat4 Camera::view() const {
+    // straight up or down: "up" on screen is the direction the yaw faces
+    if (std::fabs(pitch) > 89.9f) {
+        float y = radians(yaw);
+        Vec3 up = -Vec3(std::sin(y), 0, std::cos(y)) * (pitch > 0 ? 1.f : -1.f);
+        return Mat4::lookAt(eye(), target, up);
+    }
+    return Mat4::lookAt(eye(), target, Vec3(0, 1, 0));
+}
 Mat4 Camera::proj(float aspect) const {
-    float n = std::max(nearClip, dist * 0.002f);
     float f = std::max(farClip, dist * 100.f);
-    return Mat4::perspective(radians(fovY), std::max(aspect, 1e-3f), n, f);
+    aspect = std::max(aspect, 1e-3f);
+    if (ortho()) {
+        // same framing as the perspective view at the target's distance
+        float h = dist * std::tan(radians(fovY) * 0.5f), w = h * aspect;
+        Mat4 r;
+        for (float& v : r.m) v = 0;
+        r.at(0, 0) = 1 / w; r.at(1, 1) = 1 / h;
+        r.at(2, 2) = -1 / f; // depth -f..f around the eye: nothing is clipped behind it
+        r.at(3, 3) = 1;
+        return r;
+    }
+    float n = std::max(nearClip, dist * 0.002f);
+    return Mat4::perspective(radians(fovY), aspect, n, f);
+}
+void Camera::setView(int v) {
+    axisView = v;
+    switch (v) {
+    case Top: yaw = 0; pitch = 90; break;
+    case Bottom: yaw = 0; pitch = -90; break;
+    case Front: yaw = 0; pitch = 0; break;
+    case Back: yaw = 180; pitch = 0; break;
+    case Right: yaw = 90; pitch = 0; break;
+    case Left: yaw = -90; pitch = 0; break;
+    default: axisView = Persp; break;
+    }
+}
+const char* Camera::viewName(int v) {
+    static const char* names[] = {"Persp", "Top", "Bottom", "Front", "Back", "Right", "Left"};
+    return v >= 0 && v <= Left ? names[v] : "Persp";
 }
 void Camera::tumble(float dx, float dy) {
+    if (ortho()) { axisView = Persp; pitch = std::clamp(pitch, -89.5f, 89.5f); }
     yaw -= dx * 0.3f;
     pitch = std::clamp(pitch + dy * 0.3f, -89.5f, 89.5f);
 }
@@ -38,7 +74,7 @@ void Camera::frame(const Vec3& mn, const Vec3& mx) {
     float r = std::max(length(mx - mn) * 0.5f, 0.05f);
     dist = r / std::sin(radians(fovY) * 0.5f) * 1.05f;
 }
-void Camera::home() { *this = Camera(); }
+void Camera::home() { int v = axisView; *this = Camera(); if (v != Persp) setView(v); }
 
 // ---------------------------------------------------------------- shaders
 namespace {

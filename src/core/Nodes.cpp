@@ -20,6 +20,7 @@ void registerWhitewaterNodes(std::vector<NodeType>& types);  // Whitewater.cpp
 namespace python { void registerNodes(std::vector<NodeType>& types); } // Python.cpp
 void registerShadingNodes(std::vector<NodeType>& types);     // Shading.cpp
 void registerShaderNodes(std::vector<NodeType>& types);      // Shader.cpp
+void registerModelingNodes(std::vector<NodeType>& types);    // Boolean.cpp
 void registerRiggingNodes(std::vector<NodeType>& types);     // Rigging.cpp
 void registerCompositingNodes(std::vector<NodeType>& types); // Compositing.cpp
 namespace {
@@ -1125,6 +1126,7 @@ std::vector<NodeType> buildTypes() {
     python::registerNodes(types);
     registerShadingNodes(types);
     registerShaderNodes(types);
+    registerModelingNodes(types);
     registerRiggingNodes(types);
     registerCompositingNodes(types);
     return types;

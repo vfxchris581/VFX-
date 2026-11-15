@@ -24,6 +24,10 @@ bool selectElements(const Geometry& g, AttribClass cls, const std::string& patte
 // One level of Catmull-Clark subdivision (interpolates point attributes linearly).
 Geometry catmullClark(const Geometry& in);
 
+// Boolean of two closed meshes. op: 0 union, 1 intersect, 2 subtract (a - b), 3 shatter (a cut by b,
+// two closed parts with a prim "piece" attribute 0 = outside b, 1 = inside). warn gets notes (open inputs).
+bool booleanMeshes(const Geometry& a, const Geometry& b, int op, Geometry& out, std::string& warn);
+
 // Merge points closer than dist; removes degenerate primitives.
 Geometry fusePoints(const Geometry& in, float dist);
 

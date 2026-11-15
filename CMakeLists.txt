@@ -36,6 +36,7 @@ add_library(hd_core STATIC
   src/core/Rigging.cpp
   src/core/Shading.cpp
   src/core/Shader.cpp
+  src/core/Boolean.cpp
   src/core/Usd.cpp
   src/core/Python.cpp
   src/core/Version.cpp

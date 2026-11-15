@@ -33,6 +33,13 @@ Node* App::activeCameraNode() {
     return n && n->type().name == "camera" ? n : nullptr;
 }
 
+void App::setViewportView(int view) {
+    if (activeCameraNode() && view != Camera::Persp) { graph.render.cameraName.clear(); activeCamAspect = 0; camera.fovY = Camera().fovY; }
+    if (view == Camera::Persp) {
+        if (camera.ortho()) { camera.axisView = Camera::Persp; camera.yaw = 45; camera.pitch = 25; }
+    } else camera.setView(view);
+}
+
 // ---------------------------------------------------------------- look through / lock
 void App::updateSceneCamera(bool navigated, float viewAspect) {
     Node* cn = activeCameraNode();
@@ -43,6 +50,7 @@ void App::updateSceneCamera(bool navigated, float viewAspect) {
         return;
     }
     if (!navigated) { // the camera node drives the view
+        camera.axisView = Camera::Persp;
         if (!ImGui::IsAnyMouseDown()) camEditActive_ = false;
         for (auto& c : collectCameras(graph, graph.frame)) {
             if (c.name != cn->name()) continue;
@@ -253,6 +261,7 @@ void App::drawShelf() {
                                   {"Mountain", "mountain", "Noise displacement"}, {"Smooth", "smooth", "Relax points"}, {"Scatter", "scatter", "Scatter points on a surface"},
                                   {"Copy to Points", "copytopoints", "Copy geometry onto points"}, {"Color", "color", "Set color"}, {"Material", "material", "Roughness, metallic, glow"},
                                   {"Material Builder", "materialbuilder", "A shader network (noise, cells, ramps, textures...)\nfor the selected node; double-click it to edit"},
+                                  {"Boolean", "boolean", "Union, intersect or subtract two closed meshes\n(wire the second mesh into input B)"}, {"Clip", "clip", "Cut with a plane"},
                                   {"Merge", "merge", "Combine geometry"}, {"Wrangle", "attribwrangle", "Run VEX-lite code"}};
     static const Tool lights[] = {{"Camera", "camera", "New camera from the current view"}, {"Point Light", "pointlight", "Light in all directions from a point"},
                                   {"Spot Light", "spotlight", "Cone of light aimed at the scene"}, {"Area Light", "arealight", "Soft light from a rectangle above the scene"},

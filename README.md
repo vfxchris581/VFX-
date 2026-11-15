@@ -11,9 +11,9 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 ## Features
 
 - **Network editor.** Nodes flow top to bottom as in Houdini. Press **Tab** (or right-click) to open a searchable node menu. Drag from an output to an input to connect; drag a wire onto empty space to add a node that's already connected. The **blue flag** sets the display node and the **yellow flag** bypasses a node. Also: box select, duplicate, rename, error badges and per-node cook stats.
-- **102 node types**:
+- **104 node types**:
   - Generators: Box, Sphere, Grid, Tube, Torus, Circle, Line, File (OBJ)
-  - Modifiers: Transform, Merge, Subdivide (Catmull-Clark), PolyExtrude, Fuse, Facet, Reverse, Blast, PolyWire
+  - Modifiers: Transform, Merge, Subdivide (Catmull-Clark), PolyExtrude, **Boolean** (union, intersect, subtract, shatter), Clip, Fuse, Facet, Reverse, Blast, PolyWire
   - Deformers: Mountain (fractal noise), Smooth, Peak, Point Jitter
   - Scene: **Ground Plane** (a checker floor that is always shown in the viewport and renders, whichever node is displayed; Create shelf)
   - Points: Scatter (area weighted), Copy to Points (orients to `N`/`up`, scales by `pscale`/`scale`, transfers `Cd`, optional Pack and Instance), Pack, Unpack
@@ -58,7 +58,7 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 - **Keyframes.** Every numeric parameter on every node can be keyframed, including lights, cameras and simulation settings. **Alt+click** a parameter's name to set a key at the current frame; after that, changing the value on another frame sets a key there automatically. Animated fields are blue, and green when a key sits on the current frame. Keys show as marks on the timeline (green for the selected nodes, grey for the rest), **<K** / **K>** jump between them, and **K** keys all animated parameters of the selection. Right-click a parameter to remove a key, choose its curve (smooth, linear or constant) or delete the animation. **Windows → Animation Editor** lists every animated channel with its keys, which you can drag in time. With **Lock** on, moving the view while looking through an animated camera keys the camera.
 - **Expressions.** Right-click any parameter and choose **Add Expression** (e.g. `sin($T*2)`, `$F*1.5`). Nodes that depend on time recook during playback; everything else stays cached.
 - **Groups.** Group fields take `0-10 15 20-40:2`, an expression such as `@P.y > 0`, and `!` to invert.
-- **Viewport.** Smooth-shaded surfaces with wireframe overlay, points (sized by `pscale` for point clouds), normals, point and primitive numbers, a ground grid and an axis gizmo. Rendering uses 4× MSAA.
+- **Viewport.** Smooth-shaded surfaces with wireframe overlay, points (sized by `pscale` for point clouds), normals, point and primitive numbers, a ground grid and an axis gizmo. Perspective plus orthographic Top, Front, Right, Bottom, Back and Left views (keys 1 to 7 over the viewport). Rendering uses 4× MSAA.
 - **Shelf.** A row of tool tabs across the top, as in Houdini: **Create**, **Modify**, **Lights and Cameras**, **Particles** and **Pyro FX**. Clicking a tool adds the node, continuing from the selected node when the tool takes an input.
 - **Lights and cameras.** Camera, Point, Spot, Area, Distant and Environment lights, plus Sky Light (sun and sky) and Ambient Light on the shelf. They are scene-level nodes, like Houdini objects: every light or camera in the top-level network is part of the scene without being wired in, and bypassing one turns it off. Shelf lights are placed and aimed at whatever is displayed. Lights show as icons in the viewport and light the Render View (not the viewport's own shading); once a scene has any light, the default sun and sky are no longer used. Pick a camera from the Scene View's camera menu to look through it; **Lock** makes view navigation move the camera, and the Render View renders through the active camera at its resolution. **Camera** on the shelf creates one from the current view. Camera roll (Z rotation) is ignored. Geometry, Volume, GI, Caustic and Portal lights and stereo/VR cameras are greyed out.
 - **Subnetworks.** Select nodes and press **Shift+C** to collapse them into a single Subnetwork node, wired in their place. Double-click it (or press **I**) to dive in and edit; **U** or the breadcrumb at the top of the Network goes back up. Outside wires arrive through Subnet Input nodes (up to 4) and the Output node is the result. Subnets nest, save with the scene, and can contain simulations.
@@ -75,6 +75,8 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 ![FLIP dam break, Vellum cloth over a ball, and the ocean](docs/screenshot-fluids-vellum.png)
 
 ![Glass, gold, subsurface wax and a textured, normal-mapped box under an HDRI (examples/materials.hdg)](docs/screenshot-materials.png)
+
+![A die (cube intersected with a sphere, pips subtracted) and a drilled, slotted bracket made with Boolean nodes (examples/boolean.hdg)](docs/screenshot-boolean.png)
 
 ![Marble, wood, rusted metal, tiles and lava, each a Material Builder shader network (examples/shaders.hdg)](docs/screenshot-shaders.png)
 
@@ -201,7 +203,7 @@ Main calls: `hd.node(name)`, `hd.nodes()`, `hd.createNode(type, name)`, `hd.node
 
 ## Examples
 
-`examples/` contains `terrain`, `ripples` (animated), `city`, `sculpt`, `molecule`, the keyframed `bounce`, the particle scenes `sparks` and `vortex`, the pyro scenes `smoke` and `fire`, `destruction` (a ball breaking a wall), `dambreak` (FLIP), `cloth` (Vellum), `ocean`, and `materials` (glass, gold, wax and a textured box under an HDRI; textures in `examples/assets`), `rig` (a skinned arm following an IK target), `mocap` (a BVH clip) and `comp` (a render graded, glowed and defocused over a background), `forest` (12,000 packed trees), `wreckingball` (RBD constraints) and `shaders` (marble, wood, rust, tiles and lava built as shader networks). `examples/scripts` has Python scripts. Press Play for the simulations. The same scenes are available inside the app under **File → Open Example**.
+`examples/` contains `terrain`, `ripples` (animated), `city`, `sculpt`, `molecule`, the keyframed `bounce`, the particle scenes `sparks` and `vortex`, the pyro scenes `smoke` and `fire`, `destruction` (a ball breaking a wall), `dambreak` (FLIP), `cloth` (Vellum), `ocean`, and `materials` (glass, gold, wax and a textured box under an HDRI; textures in `examples/assets`), `rig` (a skinned arm following an IK target), `mocap` (a BVH clip) and `comp` (a render graded, glowed and defocused over a background), `forest` (12,000 packed trees), `wreckingball` (RBD constraints) `shaders` (marble, wood, rust, tiles and lava built as shader networks) and `boolean` (a die and a machined bracket). `examples/scripts` has Python scripts. Press Play for the simulations. The same scenes are available inside the app under **File → Open Example**.
 
 ## Command line (`hdc`)
 

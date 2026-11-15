@@ -192,6 +192,26 @@ int main(int argc, char** argv) {
             for (int i = 0; i < 3; ++i) runFrame();
         }
     }
+    // orthographic views on the boolean example: Top / Front / Right draw, the grid follows the view,
+    // tumbling returns to perspective
+    {
+        app.loadScene(exDir + "/boolean.hdg");
+        for (int i = 0; i < 3; ++i) runFrame();
+        const size_t tris = app.renderer.stats().triangles;
+        for (int v : {hd::Camera::Top, hd::Camera::Front, hd::Camera::Right}) {
+            app.setViewportView(v);
+            app.frameGeometry();
+            for (int i = 0; i < 3; ++i) runFrame();
+            if (!app.camera.ortho() || app.renderer.stats().triangles != tris) { std::printf("FAIL ortho view %d\n", v); ++failures; }
+            save(std::string("view_") + hd::Camera::viewName(v));
+        }
+        app.camera.tumble(10, 5);
+        if (app.camera.ortho()) { std::printf("FAIL tumble should leave the orthographic view\n"); ++failures; }
+        app.setViewportView(hd::Camera::Top);
+        app.setViewportView(hd::Camera::Persp);
+        if (app.camera.ortho()) { std::printf("FAIL back to perspective\n"); ++failures; }
+        for (int i = 0; i < 3; ++i) runFrame();
+    }
     // an empty scene: what you see when you start modelling (the reference grid on its own)
     app.newScene(false);
     for (int i = 0; i < 4; ++i) runFrame();

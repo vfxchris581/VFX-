@@ -14,7 +14,7 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Houdini-style menus and shelf | Partial | File, Edit, Render, Assets, Windows, Help; shelf tabs Create, Modify, Lights and Cameras, Particles, Pyro FX, Rigid Bodies, Fluids, Vellum, Rigging, Compositing. No separate Modeling / Rigging / Solaris / Compositing menus yet |
 | Dockable panes | Partial | Panes can be shown, hidden and reset; free docking and multi-monitor windows are not done |
 | Viewport | Working | Perspective, MSAA, wireframe, points, normals, ground grid, Display Options |
-| Orthographic views | Planned | |
+| Orthographic views | Working | Top, Front, Right, Bottom, Back, Left (keys 1 to 7); see Phase 13 |
 | Cameras | Partial | Camera nodes, look-through, lock-to-view, keyframed cameras. No focal length/sensor model, DOF, motion blur or lens distortion yet |
 | Camera tracking | Planned | |
 | Toolkit choice | Note | The spec suggests Qt. The UI is Dear ImGui today. Moving to Qt is possible because the engine has no UI dependencies, but it hasn't been started |
@@ -30,7 +30,8 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Attributes, groups, wrangles | Working | VEX-lite snippet language; float and vector attributes (no string attributes yet) |
 | Scatter, Copy to Points | Working | Orients to N/up, scales by pscale/scale |
 | Fracturing | Working | **Voronoi Fracture**. See Phase 3 |
-| Booleans, remeshing, retopology, UV tools, sculpting, NURBS, procedural architecture, terrain heightfields | Planned | |
+| Booleans, Clip | Working | See Phase 13 |
+| Remeshing, retopology, UV tools, sculpting, NURBS, procedural architecture, terrain heightfields | Planned | |
 | VDB workflows | Planned | Volumes are dense grids, not OpenVDB |
 | Packed primitives / instancing | Working | See Phase 9 below |
 
@@ -70,7 +71,7 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Texture maps, UDIM | Working | Base color, roughness, metallic, normal maps via point `uv`; PNG (all standard formats except interlaced), OpenEXR (scanline NONE/ZIPS/ZIP), Radiance HDR. JPEG and TIFF aren't read. Bilinear filtering, no mipmaps (distant textures can shimmer) |
 | UV Project | Working | Planar, box, cylindrical, spherical. No UV unwrapping, layout or editor |
 | Procedural textures | Partial | Through Attribute Wrangle (noise, etc.) into `Cd`; no texture nodes in the material |
-| Node-based shader networks (VOPs) | Planned | |
+| Node-based shader networks (VOPs) | Working | Material Builder with 21 shading nodes; see Phase 12 |
 | Displacement | Planned | Normal maps only |
 | Lights | Working | Point, spot, area, distant, sky, constant and HDRI environment (importance sampled + MIS). No light linking, IES profiles or geometry lights |
 | Depth of field | Working | Thin lens (f-stop, focus distance; camera nodes or Render Settings). Tested: out-of-focus edges widen, in-focus ones don't |
@@ -102,7 +103,7 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | USD export | Working | .usda: mesh (normals, displayColor, st), GeomSubsets per material, UsdPreviewSurface + UsdUVTexture, curves, points, cameras, UsdLux lights (HDRI dome), time-sampled animation. Written without the USD library and checked by round-tripping (exact positions); not yet validated with usdchecker |
 | USD import | Partial | .usda meshes, curves and points with xformOps, colours, normals, uvs (first time sample). No binary .usdc, references, payloads, variants or sublayers |
 | LOPs / Solaris (stage editing, layers, variants) | Planned | |
-| Python scripting | Planned | VEX-lite and parameter expressions exist |
+| Python scripting | Working | See Phase 11 |
 
 ## Phase 7: testing and stability
 
@@ -189,6 +190,15 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Rendering | Working: the path tracer runs the program at every hit (triangles, curves, points, packed instances, shadow rays through transmissive shaders), with bound attributes interpolated across faces and bump mapping from the height gradient (three extra evaluations). Tested: constant, math, mix, fit, ramp, checker, noise range, voronoi cells, bound attributes, bump, time dependence, save/load, emission and white-furnace glass renders, packed instances, a pattern visible in the render |
 | Editor | Working: diving into a Material Builder shows the shader network; the Tab menu and the Shading shelf list only shading nodes, and the viewport and Render View keep showing the scene. Tested in the app smoke test |
 | Limits | Not done: one output per shading node (use Separate for components; no multi-output VOPs), no shader preview ball, no displacement, no volume or light shaders, three-stop ramps only, the viewport preview is per point (fine patterns need dense meshes; bump is render-only), patterns use P where the geometry is at render time (bind a `rest` attribute to keep them on deforming or moving objects), not exposed to Python yet |
+
+## Phase 13: modelling tools
+
+| Item | Status |
+|---|---|
+| Boolean | Working: union, intersect, subtract (A - B) and shatter (A cut by B into two closed parts with a `piece` attribute). Triangle-triangle intersection with bounding-volume hierarchies, each cut triangle re-triangulated with the cut as edges (constrained Delaunay), pieces classified by ray casting, coplanar faces resolved by which way they face. Point attributes are interpolated, prim attributes copied, uncut polygons kept whole. Output is welded, T-junctions are closed and pinholes filled. Packed inputs are unpacked; an open input gives a warning. Tested: exact volumes for overlapping, flush (coplanar), touching, separate and nested boxes; volume identities and closed output for a sphere against a rotated torus; shatter parts; attribute carry-over. A stress run of 400 random pairs of boxes, spheres, tori and tubes gave closed, correct-volume results in 399 (the miss: two almost identical spheres on top of each other) |
+| Clip | Working: cuts polygons and curves with a plane (keep above, below or both), attributes interpolated at the cut. The cut is left open (no cap) |
+| Orthographic views | Working: Top, Bottom, Front, Back, Right, Left with the same pan and zoom controls; the reference grid switches to the plane facing a side view; tumbling goes back to perspective; choosing one leaves a camera node's view. Tested in the app smoke test. The Render View always renders in perspective |
+| Limits | Boolean: cut faces come out as triangles (uncut faces keep their polygons); inputs must be closed for a meaningful inside; nearly identical overlapping surfaces can leave small defects; no "seam" or "resolve self-intersections" modes. Not done: PolyBevel, remesh, retopology, sculpt brushes, NURBS, heightfield terrain |
 
 ## Modelling aids
 

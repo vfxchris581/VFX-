@@ -1,0 +1,300 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 1,
+  "nodes": [
+    {
+      "inputs": [],
+      "name": "cube",
+      "parms": {
+        "size": [2, 2, 2]
+      },
+      "type": "box",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": ["cube"],
+      "name": "ivory",
+      "parms": {
+        "class": 1,
+        "color": [0.930000007, 0.910000026, 0.860000014]
+      },
+      "type": "color",
+      "x": 0,
+      "y": 80
+    },
+    {
+      "inputs": [],
+      "name": "rounding",
+      "parms": {
+        "cols": 128,
+        "rad": [1.36000001, 1.36000001, 1.36000001],
+        "rows": 64
+      },
+      "type": "sphere",
+      "x": 220,
+      "y": 0
+    },
+    {
+      "inputs": ["ivory", "rounding"],
+      "name": "rounded_cube",
+      "parms": {
+        "op": 1
+      },
+      "type": "boolean",
+      "x": 100,
+      "y": 170
+    },
+    {
+      "inputs": ["pip1", "pip2", "pip3", "pip4", "pip5", "pip6", null, null],
+      "name": "pips",
+      "parms": {},
+      "type": "merge",
+      "x": 420,
+      "y": 170
+    },
+    {
+      "inputs": [],
+      "name": "pip1",
+      "parms": {
+        "cols": 32,
+        "rad": [0.300000012, 0.300000012, 0.300000012],
+        "rows": 16,
+        "t": [0, 1, 0]
+      },
+      "type": "sphere",
+      "x": 300,
+      "y": 80
+    },
+    {
+      "inputs": [],
+      "name": "pip2",
+      "parms": {
+        "cols": 32,
+        "rad": [0.200000003, 0.200000003, 0.200000003],
+        "rows": 16,
+        "t": [-0.449999988, 0.449999988, 1]
+      },
+      "type": "sphere",
+      "x": 410,
+      "y": 80
+    },
+    {
+      "inputs": [],
+      "name": "pip3",
+      "parms": {
+        "cols": 32,
+        "rad": [0.200000003, 0.200000003, 0.200000003],
+        "rows": 16,
+        "t": [0.449999988, -0.449999988, 1]
+      },
+      "type": "sphere",
+      "x": 520,
+      "y": 80
+    },
+    {
+      "inputs": [],
+      "name": "pip4",
+      "parms": {
+        "cols": 32,
+        "rad": [0.200000003, 0.200000003, 0.200000003],
+        "rows": 16,
+        "t": [1, 0.5, 0.5]
+      },
+      "type": "sphere",
+      "x": 630,
+      "y": 80
+    },
+    {
+      "inputs": [],
+      "name": "pip5",
+      "parms": {
+        "cols": 32,
+        "rad": [0.200000003, 0.200000003, 0.200000003],
+        "rows": 16,
+        "t": [1, 0, 0]
+      },
+      "type": "sphere",
+      "x": 740,
+      "y": 80
+    },
+    {
+      "inputs": [],
+      "name": "pip6",
+      "parms": {
+        "cols": 32,
+        "rad": [0.200000003, 0.200000003, 0.200000003],
+        "rows": 16,
+        "t": [1, -0.5, -0.5]
+      },
+      "type": "sphere",
+      "x": 850,
+      "y": 80
+    },
+    {
+      "inputs": ["pips"],
+      "name": "pip_color",
+      "parms": {
+        "class": 1,
+        "color": [0.0500000007, 0.0500000007, 0.0599999987]
+      },
+      "type": "color",
+      "x": 420,
+      "y": 240
+    },
+    {
+      "inputs": ["rounded_cube", "pip_color"],
+      "name": "die",
+      "parms": {},
+      "type": "boolean",
+      "x": 200,
+      "y": 320
+    },
+    {
+      "inputs": ["die"],
+      "name": "plastic",
+      "parms": {
+        "rough": 0.25
+      },
+      "type": "material",
+      "x": 200,
+      "y": 400
+    },
+    {
+      "inputs": ["plastic"],
+      "name": "place_die",
+      "parms": {
+        "r": [0, 25, 0],
+        "t": [-1.39999998, 1, 0]
+      },
+      "type": "xform",
+      "x": 200,
+      "y": 480
+    },
+    {
+      "inputs": [],
+      "name": "block",
+      "parms": {
+        "size": [2.20000005, 0.600000024, 1.39999998],
+        "t": [0, 0.300000012, 0]
+      },
+      "type": "box",
+      "x": 700,
+      "y": 0
+    },
+    {
+      "inputs": [],
+      "name": "hole",
+      "parms": {
+        "cols": 48,
+        "rad1": 0.349999994,
+        "rad2": 0.349999994
+      },
+      "type": "tube",
+      "x": 900,
+      "y": 0
+    },
+    {
+      "inputs": ["hole"],
+      "name": "hole_position",
+      "parms": {
+        "t": [0.5, 0.300000012, 0]
+      },
+      "type": "xform",
+      "x": 900,
+      "y": 80
+    },
+    {
+      "inputs": ["block", "hole_position"],
+      "name": "drill",
+      "parms": {},
+      "type": "boolean",
+      "x": 800,
+      "y": 170
+    },
+    {
+      "inputs": [],
+      "name": "slot",
+      "parms": {
+        "size": [0.899999976, 0.400000006, 2],
+        "t": [-0.600000024, 0.600000024, 0]
+      },
+      "type": "box",
+      "x": 1050,
+      "y": 80
+    },
+    {
+      "inputs": ["drill", "slot"],
+      "name": "cut_slot",
+      "parms": {},
+      "type": "boolean",
+      "x": 850,
+      "y": 250
+    },
+    {
+      "inputs": ["cut_slot"],
+      "name": "steel",
+      "parms": {
+        "color": [0.800000012, 0.800000012, 0.819999993],
+        "metal": 1,
+        "rough": 0.300000012,
+        "setcolor": 1
+      },
+      "type": "material",
+      "x": 850,
+      "y": 330
+    },
+    {
+      "inputs": ["steel"],
+      "name": "place_bracket",
+      "parms": {
+        "r": [0, -30, 0],
+        "t": [1.60000002, 0, 0.200000003]
+      },
+      "type": "xform",
+      "x": 850,
+      "y": 410
+    },
+    {
+      "inputs": ["place_die", "place_bracket", null, null, null, null, null, null],
+      "name": "OUT",
+      "parms": {},
+      "type": "merge",
+      "x": 500,
+      "y": 560
+    },
+    {
+      "inputs": [],
+      "name": "floor",
+      "parms": {},
+      "type": "groundplane",
+      "x": 1100,
+      "y": 560
+    }
+  ],
+  "range": [1, 240],
+  "render": {
+    "bounces": 6,
+    "camera": [0, 0.699999988, 0, 20, 22, 7.5, 35],
+    "curveWidth": 0.0120000001,
+    "denoise": true,
+    "dof": false,
+    "exposure": 1,
+    "focusDist": 5,
+    "fstop": 4,
+    "ground": false,
+    "groundY": 0,
+    "height": 540,
+    "motionBlur": false,
+    "samples": 128,
+    "shutter": 0.5,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

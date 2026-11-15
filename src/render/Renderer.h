@@ -17,11 +17,18 @@ struct Camera {
     float dist = 8.f;
     float fovY = 45.f;    // degrees
     float nearClip = 0.01f, farClip = 10000.f;
+    // 0 = perspective; otherwise an orthographic view looking along an axis (Houdini's Top, Front...)
+    enum View { Persp = 0, Top, Bottom, Front, Back, Right, Left };
+    int axisView = Persp;
+    bool ortho() const { return axisView != Persp; }
+    // Switches to an axis view (keeps target and distance; distance sets the zoom).
+    void setView(int v);
+    static const char* viewName(int v);
 
     Vec3 eye() const;
     Mat4 view() const;
     Mat4 proj(float aspect) const;
-    void tumble(float dxPixels, float dyPixels);
+    void tumble(float dxPixels, float dyPixels); // leaves an orthographic view for perspective
     void pan(float dxPixels, float dyPixels, float viewportHeight);
     void dolly(float amount); // >0 moves in
     void frame(const Vec3& mn, const Vec3& mx);

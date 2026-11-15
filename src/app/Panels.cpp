@@ -47,6 +47,21 @@ void App::drawViewport() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Ground plane, markers, background (D)");
     ImGui::SameLine(); if (ImGui::SmallButton("Home")) camera.home();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Home camera (H)");
+    // view menu: perspective or an orthographic axis view (Houdini's Top / Front / Right...)
+    ImGui::SameLine(); ImGui::TextDisabled("|"); ImGui::SameLine();
+    {
+        if (ImGui::SmallButton((std::string(Camera::viewName(camera.axisView)) + " v##viewmenu").c_str())) ImGui::OpenPopup("##viewmenu");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Perspective or orthographic views.\nKeys over the viewport: 1 Persp, 2 Top, 3 Front, 4 Right, 5 Bottom, 6 Back, 7 Left.\nTumbling an orthographic view goes back to perspective.");
+        if (ImGui::BeginPopup("##viewmenu")) {
+            static const int order[] = {Camera::Persp, Camera::Top, Camera::Front, Camera::Right, Camera::Bottom, Camera::Back, Camera::Left};
+            static const char* keys[] = {"1", "2", "3", "4", "5", "6", "7"};
+            for (int i = 0; i < 7; ++i) {
+                if (i == 1) ImGui::Separator();
+                if (ImGui::MenuItem(i == 0 ? "Perspective" : Camera::viewName(order[i]), keys[i], camera.axisView == order[i])) setViewportView(order[i]);
+            }
+            ImGui::EndPopup();
+        }
+    }
     // camera menu: look through a camera node, like Houdini's viewport camera menu
     ImGui::SameLine(); ImGui::TextDisabled("|"); ImGui::SameLine();
     {
@@ -75,7 +90,13 @@ void App::drawViewport() {
     viewOpts.pixelScale = scale.y > 0 ? scale.y : 1.f; // grid lines keep their width on Retina screens
     int w = int(avail.x * scale.x), h = int(avail.y * scale.y);
     viewportW_ = avail.x; viewportH_ = avail.y;
-    unsigned tex = renderer.render(w, h, camera, viewOpts);
+    // a side view looks along the ground: show the grid in the plane facing it, as Houdini does
+    ViewOptions vo = viewOpts;
+    if (camera.ortho() && vo.gridPlane == 0) {
+        if (camera.axisView == Camera::Front || camera.axisView == Camera::Back) vo.gridPlane = 1;
+        else if (camera.axisView == Camera::Right || camera.axisView == Camera::Left) vo.gridPlane = 2;
+    }
+    unsigned tex = renderer.render(w, h, camera, vo);
     ImVec2 imgPos = ImGui::GetCursorScreenPos();
     ImGui::Image((ImTextureID)(intptr_t)tex, avail, ImVec2(0, 1), ImVec2(1, 0));
     bool hovered = ImGui::IsItemHovered();
@@ -159,6 +180,10 @@ void App::drawViewport() {
         if (ImGui::IsKeyPressed(ImGuiKey_H, false)) { camera.home(); navigated = true; }
         if (ImGui::IsKeyPressed(ImGuiKey_W, false) && !io.KeyCtrl) viewOpts.wireframe = !viewOpts.wireframe;
         if (ImGui::IsKeyPressed(ImGuiKey_D, false) && !io.KeyCtrl) showDisplayOptions = !showDisplayOptions;
+        static const ImGuiKey viewKeys[] = {ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4, ImGuiKey_5, ImGuiKey_6, ImGuiKey_7};
+        static const int viewFor[] = {Camera::Persp, Camera::Top, Camera::Front, Camera::Right, Camera::Bottom, Camera::Back, Camera::Left};
+        for (int i = 0; i < 7; ++i)
+            if (ImGui::IsKeyPressed(viewKeys[i], false) && !io.KeyCtrl && !io.KeySuper) { setViewportView(viewFor[i]); navigated = true; }
     }
 
     if (navigated) updateSceneCamera(true, avail.x / avail.y);

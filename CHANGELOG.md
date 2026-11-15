@@ -5,7 +5,14 @@ what works, what is partial and what is planned.
 
 ## 0.7.0
 
-Phases 8 to 12: installers and releases, packed primitives and instancing, rigid-body constraints, Python scripting, node-based shaders, plus new simulation and viewport features.
+Phases 8 to 13: installers and releases, packed primitives and instancing, rigid-body constraints, Python scripting, node-based shaders, modelling tools, plus new simulation and viewport features.
+
+### Modelling tools (Phase 13)
+
+- Boolean node: union, intersect, subtract and shatter of closed meshes. Faces lying in the same plane are handled, attributes carry over (colours, uvs, materials), uncut polygons stay whole, and the result is welded with no T-junction cracks. About 0.6 s for an 80,000-polygon sphere against a 20,000-polygon torus.
+- Clip node: cut geometry with a plane, keeping one side or both.
+- Orthographic viewport views: Top, Front, Right, Bottom, Back, Left from the viewport's view menu or keys 1 to 7. The grid turns to face side views; tumbling returns to perspective.
+- New example: `boolean.hdg` (a die and a drilled, slotted bracket).
 
 ### Shader networks (Phase 12)
 

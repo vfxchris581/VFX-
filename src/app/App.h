@@ -74,6 +74,8 @@ public:
     Graph& net();
     // The network whose display node is shown: net(), or inside a Material Builder the network around it.
     Graph& viewNet();
+    // Perspective or an orthographic axis view in the viewport (leaves a camera node's view).
+    void setViewportView(int view);
     Node* current() { return net().findNode(currentId); }
     const std::vector<std::string>& netPath() const { return netPath_; }
     void diveInto(Node* subnetNode);

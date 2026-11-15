@@ -178,6 +178,40 @@ int main(int argc, char** argv) {
             g.addPrim({0, 1, 2});
             runOverElements(g, AttribClass::Point, *prog, 1, 24, nullptr, err);
         });
+    // booleans: bytes pick the shapes, transforms (including degenerate scales and exact overlaps) and operation
+    {
+        Bytes seed;
+        for (int i = 0; i < 24; ++i) seed.push_back(uint8_t(i * 53 + 7));
+        run("boolean", seed, [](const Bytes& b) {
+            size_t pos = 0;
+            auto next = [&]() -> uint32_t { return pos < b.size() ? b[pos++] : 0u; };
+            static const char* shapes[] = {"box", "sphere", "torus", "tube", "grid"};
+            Graph g;
+            Node* in[2];
+            for (int k = 0; k < 2; ++k) {
+                Node* s = g.createNode(shapes[next() % 5]);
+                if (Parm* r = s->parm("rows")) r->val[0] = float(3 + next() % 6);
+                if (Parm* c = s->parm("cols")) c->val[0] = float(3 + next() % 8);
+                Node* x = g.createNode("xform");
+                g.connect(s, x, 0);
+                for (int c = 0; c < 3; ++c) {
+                    x->parm("t")->val[c] = (float(next() % 9) - 4) * 0.25f;
+                    x->parm("r")->val[c] = float(next() % 8) * 45.f;
+                    x->parm("s")->val[c] = float(next() % 4) * 0.5f; // 0 flattens the shape
+                }
+                in[k] = x;
+            }
+            Node* bo = g.createNode("boolean");
+            g.connect(in[0], bo, 0);
+            g.connect(in[1], bo, 1);
+            bo->parm("op")->val[0] = float(next() % 4);
+            g.cook(bo);
+            const Geometry& r = bo->geometry();
+            for (int v : r.vertices) if (v < 0 || v >= int(r.numPoints())) std::abort();
+            for (auto& [n, a] : r.primAttribs) if (a.count() != r.numPrims()) std::abort();
+            for (auto& [n, a] : r.pointAttribs) if (a.count() != r.numPoints()) std::abort();
+        });
+    }
     // shader networks: bytes pick shading nodes, wiring and parameter values (huge, tiny, NaN-free extremes)
     {
         Bytes seed;

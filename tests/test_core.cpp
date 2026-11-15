@@ -3206,6 +3206,159 @@ TEST(shader_render) {
     CHECK(a.x > 2 * a.z ? d.z > 2 * d.x : a.z > 2 * a.x);
 }
 
+static double meshVolume(const Geometry& g) {
+    double v = 0;
+    for (size_t i = 0; i < g.numPrims(); ++i) {
+        Vec3 a = g.P[size_t(g.primVertex(int(i), 0))];
+        for (int k = 1; k + 1 < g.prims[i].count; ++k) v += double(dot(a, cross(g.P[size_t(g.primVertex(int(i), k))], g.P[size_t(g.primVertex(int(i), k + 1))]))) / 6.0;
+    }
+    return v;
+}
+// edges not shared by exactly two polygons (0 = a closed manifold surface)
+static size_t badEdges(const Geometry& g) {
+    std::map<std::pair<int, int>, int> m;
+    for (size_t i = 0; i < g.numPrims(); ++i)
+        for (int k = 0; k < g.prims[i].count; ++k) {
+            int a = g.primVertex(int(i), k), b = g.primVertex(int(i), (k + 1) % g.prims[i].count);
+            ++m[{std::min(a, b), std::max(a, b)}];
+        }
+    size_t bad = 0;
+    for (auto& [e, c] : m) if (c != 2) ++bad;
+    return bad;
+}
+
+TEST(boolean) {
+    Graph g;
+    Node* a = g.createNode("box");
+    setP(a, "size", Vec3(2));
+    Node* b = g.createNode("box");
+    Node* bo = g.createNode("boolean");
+    g.connect(a, bo, 0);
+    g.connect(b, bo, 1);
+    auto run = [&](int op) -> const Geometry& { setF(bo, "op", float(op)); g.cook(bo); CHECK(bo->error().empty()); return bo->geometry(); };
+    // a unit cube poking out of a corner of a 2-cube: overlap 0.5^3
+    setP(b, "t", Vec3(1, 1, 1));
+    const double expectCorner[4] = {8.875, 0.125, 7.875, 8.0};
+    for (int op = 0; op < 4; ++op) {
+        const Geometry& r = run(op);
+        CHECK(std::fabs(meshVolume(r) - expectCorner[op]) < 1e-3 && badEdges(r) == 0 && bo->warning().empty());
+    }
+    // faces lying in the same planes (the hard case): 2x2x2 boxes offset by 1 along X
+    setP(b, "size", Vec3(2)); setP(b, "t", Vec3(1, 0, 0));
+    const double expectFlush[4] = {12, 4, 4, 8};
+    for (int op = 0; op < 4; ++op) {
+        const Geometry& r = run(op);
+        if (std::fabs(meshVolume(r) - expectFlush[op]) > 1e-3 || badEdges(r)) std::printf("  flush op %d: volume %.4f, %zu bad edges\n", op, meshVolume(r), badEdges(r));
+        CHECK(std::fabs(meshVolume(r) - expectFlush[op]) < 1e-3 && badEdges(r) == 0);
+    }
+    // touching boxes (one shared face): the union drops the wall between them, nothing intersects
+    setP(b, "t", Vec3(2, 0, 0));
+    CHECK(std::fabs(meshVolume(run(0)) - 16) < 1e-3 && badEdges(run(0)) == 0);
+    CHECK(run(1).numPrims() == 0);
+    CHECK(std::fabs(meshVolume(run(2)) - 8) < 1e-3);
+    // apart: union keeps both, subtract keeps A; B inside A: subtract leaves a cavity
+    setP(b, "t", Vec3(5, 0, 0));
+    CHECK(std::fabs(meshVolume(run(0)) - 16) < 1e-3 && run(1).numPrims() == 0 && run(2).numPrims() == 6);
+    setP(b, "size", Vec3(1)); setP(b, "t", Vec3(0));
+    CHECK(std::fabs(meshVolume(run(2)) - 7) < 1e-3 && run(2).numPrims() == 12 && std::fabs(meshVolume(run(1)) - 1) < 1e-3);
+    // curved surfaces: volumes add up (union + intersection = A + B; A - B = A - intersection), closed, in order
+    Node* sp = g.createNode("sphere");
+    setP(sp, "rad", Vec3(1.2f));
+    Node* to = g.createNode("torus");
+    Node* x = g.createNode("xform");
+    g.connect(to, x, 0);
+    setP(x, "r", Vec3(31, 17, 59)); setP(x, "t", Vec3(0.3f, 0.2f, -0.1f));
+    g.connect(sp, bo, 0);
+    g.connect(x, bo, 1);
+    g.cook(sp); g.cook(x);
+    const double va = meshVolume(sp->geometry()), vb = meshVolume(x->geometry());
+    double v[4];
+    for (int op = 0; op < 4; ++op) { const Geometry& r = run(op); v[op] = meshVolume(r); CHECK(badEdges(r) == 0); }
+    CHECK(std::fabs(v[0] + v[1] - va - vb) < 2e-3 * (va + vb) && std::fabs(v[2] + v[1] - va) < 2e-3 * va && std::fabs(v[3] - va) < 2e-3 * va);
+    CHECK(v[1] > 0.1 && v[1] < std::min(va, vb) && v[0] > std::max(va, vb));
+    // shatter: two closed pieces marked by "piece"
+    const Geometry& sh = run(3);
+    const Attrib* pc = sh.findAttrib(AttribClass::Prim, "piece");
+    CHECK(pc != nullptr);
+    if (pc) {
+        std::vector<int> p0, p1;
+        for (size_t i = 0; i < sh.numPrims(); ++i) (pc->getF(i) < 0.5f ? p0 : p1).push_back(int(i));
+        Geometry g0 = sh.extractPrims(p0), g1 = sh.extractPrims(p1);
+        CHECK(!p0.empty() && !p1.empty() && badEdges(g0) == 0 && badEdges(g1) == 0);
+        CHECK(std::fabs(meshVolume(g0) - v[2]) < 1e-3 && std::fabs(meshVolume(g1) - v[1]) < 1e-3);
+    }
+    // attributes carry over: each side keeps its prim colour, uncut polygons stay whole, uv is interpolated
+    Node* ca = g.createNode("color");
+    setF(ca, "class", 1); setP(ca, "color", Vec3(1, 0, 0));
+    Node* cb = g.createNode("color");
+    setF(cb, "class", 1); setP(cb, "color", Vec3(0, 0, 1));
+    g.connect(a, ca, 0);
+    g.connect(b, cb, 0);
+    setP(b, "size", Vec3(1)); setP(b, "t", Vec3(1, 1, 1));
+    g.connect(ca, bo, 0);
+    g.connect(cb, bo, 1);
+    const Geometry& col = run(2);
+    const Attrib* cd = col.findAttrib(AttribClass::Prim, "Cd");
+    CHECK(cd != nullptr);
+    int red = 0, blue = 0, quads = 0;
+    for (size_t i = 0; cd && i < col.numPrims(); ++i) {
+        Vec3 c = cd->getV(i);
+        if (c.x > 0.9f && c.z < 0.1f) ++red; else if (c.z > 0.9f && c.x < 0.1f) ++blue;
+        if (col.prims[i].count == 4) ++quads;
+    }
+    CHECK(red > 0 && blue > 0 && red + blue == int(col.numPrims()) && quads == 3); // the three faces away from the cut
+    CHECK(!col.findAttrib(AttribClass::Point, "__bcut"));
+    // an open second input is reported
+    Node* gr = g.createNode("grid");
+    g.connect(gr, bo, 1);
+    g.cook(bo);
+    CHECK(bo->error().empty() && bo->warning().find("not closed") != std::string::npos);
+    // packed inputs are unpacked
+    Node* pk = g.createNode("pack");
+    g.connect(cb, pk, 0);
+    g.connect(pk, bo, 1);
+    CHECK(std::fabs(meshVolume(run(2)) - 7.875) < 1e-3);
+}
+
+TEST(clip) {
+    Graph g;
+    Node* b = g.createNode("box");
+    setP(b, "size", Vec3(2));
+    Node* c = g.createNode("clip");
+    g.connect(b, c, 0);
+    setP(c, "origin", Vec3(0, 0.5f, 0));
+    g.cook(c);
+    CHECK(c->error().empty());
+    Vec3 mn, mx;
+    c->geometry().bounds(mn, mx);
+    CHECK(std::fabs(mn.y - 0.5f) < 1e-5f && std::fabs(mx.y - 1) < 1e-5f && c->geometry().numPrims() == 5); // top + 4 cut sides
+    setF(c, "keep", 1);
+    g.cook(c);
+    c->geometry().bounds(mn, mx);
+    CHECK(std::fabs(mn.y + 1) < 1e-5f && std::fabs(mx.y - 0.5f) < 1e-5f && c->geometry().numPrims() == 5);
+    setF(c, "keep", 2);
+    g.cook(c);
+    CHECK(c->geometry().numPrims() == 10);
+    double area = 0;
+    for (size_t i = 0; i < c->geometry().numPrims(); ++i) area += c->geometry().primArea(int(i));
+    CHECK(std::fabs(area - 24) < 1e-3); // nothing lost by splitting
+    // attributes are interpolated at the cut; a plane that misses leaves the input alone
+    Node* col = g.createNode("color");
+    setF(col, "mode", 2);
+    g.connect(b, col, 0);
+    g.connect(col, c, 0);
+    setF(c, "keep", 0);
+    setP(c, "origin", Vec3(0)); setP(c, "dir", Vec3(1, 1, 0));
+    g.cook(c);
+    CHECK(c->error().empty() && c->geometry().findAttrib(AttribClass::Point, "Cd") && c->geometry().findAttrib(AttribClass::Point, "Cd")->count() == c->geometry().numPoints());
+    setP(c, "origin", Vec3(0, -5, 0)); setP(c, "dir", Vec3(0, 1, 0));
+    g.cook(c);
+    CHECK(c->geometry().numPrims() == 6);
+    setP(c, "dir", Vec3(0));
+    g.cook(c);
+    CHECK(!c->error().empty());
+}
+
 int main() {
     for (auto& t : tests()) {
         int before = g_failed;
