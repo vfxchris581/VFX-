@@ -40,6 +40,7 @@ add_library(hd_core STATIC
   src/core/Sim.cpp
   src/core/Vellum.cpp
   src/core/Volume.cpp
+  src/core/Whitewater.cpp
 )
 target_include_directories(hd_core PUBLIC src)
 

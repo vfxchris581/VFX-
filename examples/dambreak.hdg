@@ -61,7 +61,7 @@
       "y": 276
     },
     {
-      "inputs": ["water_material", "obstacle", null, null, null, null, null, null],
+      "inputs": ["water_material", "obstacle", "whitewater", null, null, null, null, null],
       "name": "merge",
       "parms": {},
       "type": "merge",
@@ -75,6 +75,14 @@
       "type": "null",
       "x": 0,
       "y": 460
+    },
+    {
+      "inputs": ["flip"],
+      "name": "whitewater",
+      "parms": {},
+      "type": "whitewater",
+      "x": 220,
+      "y": 184
     }
   ],
   "range": [1, 120],
@@ -82,11 +90,17 @@
     "bounces": 4,
     "camera": [0, 0.400000006, 0, 20, 28, 6, 45],
     "curveWidth": 0.0120000001,
+    "denoise": false,
+    "dof": false,
     "exposure": 1,
+    "focusDist": 5,
+    "fstop": 4,
     "ground": true,
     "groundY": 0,
     "height": 540,
+    "motionBlur": false,
     "samples": 64,
+    "shutter": 0.5,
     "skyIntensity": 1,
     "sunAzimuth": 40,
     "sunElevation": 50,

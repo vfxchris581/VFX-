@@ -1331,6 +1331,76 @@ TEST(ocean) {
     CHECK(var2 < var * 0.5);
 }
 
+TEST(whitewater) {
+    // dam break: a column of water collapses and hits the far wall -> spray, foam and bubbles
+    auto build = [](Graph& g, float columnHeight) {
+        Node* src = g.createNode("box");
+        src->parm("size")->val[0] = 0.5f; src->parm("size")->val[1] = columnHeight; src->parm("size")->val[2] = 0.6f;
+        src->parm("t")->val[0] = -0.7f; src->parm("t")->val[1] = columnHeight * 0.5f;
+        Node* fl = g.createNode("flipsolver", 0, 0, "flip");
+        g.connect(src, fl, 0);
+        fl->parm("voxelsize")->val[0] = 0.08f;
+        fl->parm("domaincenter")->val[1] = 0.6f;
+        fl->parm("domainsize")->val[0] = 2; fl->parm("domainsize")->val[1] = 1.2f; fl->parm("domainsize")->val[2] = 0.64f;
+        Node* w = g.createNode("whitewater", 0, 0, "ww");
+        g.connect(fl, w, 0);
+        return w;
+    };
+    Graph g;
+    Node* w = build(g, 1.1f);
+    for (int f = 1; f <= 24; ++f) { g.frame = float(f); g.cook(w); }
+    CHECK(w->error().empty());
+    const Geometry a = w->geometry();
+    CHECK(a.numPoints() > 50);
+    const Attrib* type = a.findAttrib(AttribClass::Point, "wwtype");
+    CHECK(type && a.findAttrib(AttribClass::Point, "v") && a.findAttrib(AttribClass::Point, "life") && a.findAttrib(AttribClass::Point, "pscale"));
+    int counts[3] = {0, 0, 0};
+    bool finite = true;
+    for (size_t i = 0; i < a.numPoints(); ++i) {
+        counts[std::clamp(int(type->getF(i)), 0, 2)]++;
+        finite = finite && std::isfinite(a.P[i].x + a.P[i].y + a.P[i].z);
+    }
+    CHECK(finite);
+    CHECK(counts[1] > 0);               // foam
+    CHECK(counts[0] + counts[2] > 0);   // and spray or bubbles
+    // stays around the liquid: above the floor, near the container
+    Vec3 mn, mx; a.bounds(mn, mx);
+    CHECK(mn.y >= -0.05f && mn.x > -1.5f && mx.x < 1.5f);
+    // foam lives on the liquid: every foam particle has fluid particles within the kernel radius
+    {
+        const Geometry& fluid = g.findNode("flip")->geometry();
+        int lonely = 0, foam = 0;
+        for (size_t i = 0; i < a.numPoints(); ++i) {
+            if (int(type->getF(i)) != 1) continue;
+            ++foam;
+            bool near = false;
+            for (const Vec3& p : fluid.P) if (length(p - a.P[i]) < 0.08f) { near = true; break; }
+            lonely += !near;
+        }
+        CHECK(foam > 0 && lonely <= foam / 20); // the fluid moved on during the last substep for a few
+    }
+    // deterministic: a fresh graph gives the same particles
+    {
+        Graph g2;
+        Node* w2 = build(g2, 1.1f);
+        for (int f = 1; f <= 24; ++f) { g2.frame = float(f); g2.cook(w2); }
+        const Geometry& b = w2->geometry();
+        CHECK(b.numPoints() == a.numPoints());
+        bool same = b.numPoints() == a.numPoints();
+        for (size_t i = 0; same && i < a.numPoints(); ++i) same = length(a.P[i] - b.P[i]) < 1e-6f;
+        CHECK(same);
+    }
+    CHECK(w->simCacheStart == 1 && w->simCacheEnd == 24);
+    // still water makes no whitewater (too little kinetic energy)
+    {
+        Graph g3;
+        Node* w3 = build(g3, 0.16f); // two voxels deep: settles without splashing
+        for (int f = 1; f <= 12; ++f) { g3.frame = float(f); g3.cook(w3); }
+        CHECK(w3->error().empty());
+        CHECK(w3->geometry().numPoints() == 0);
+    }
+}
+
 TEST(vellum) {
     // hanging cloth pinned along its top edge: pins stay put and the cloth barely stretches
     Graph g;
