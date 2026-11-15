@@ -1,5 +1,6 @@
 ; Windows installer for HD (64-bit). Built by CI:
 ;   makensis /DVERSION=0.2.0 /DSRCDIR=dist\HD /DOUTFILE=dist\HD-Windows-Setup.exe packaging\windows\installer.nsi
+; Use absolute paths: makensis resolves relative paths from this script's folder.
 ; SRCDIR must contain HD.exe, hdc.exe, README.md and the examples folder.
 
 Unicode true

@@ -1137,7 +1137,7 @@ TEST(rbd_solver) {
     r2->geometry().bounds(mn, mx);
     CHECK(mn.y > -0.01f);
 
-    // a fast projectile (v attribute) breaks the glued block apart
+    // a fast projectile (v attribute) breaks the glued block apart (at 40 m/s it breaks for every seed tried)
     r2->parm("glue")->val[0] = 1; r2->touch();
     Node* ball = g2.createNode("sphere");
     ball->parm("rad")->val[0] = ball->parm("rad")->val[1] = ball->parm("rad")->val[2] = 0.25f;
@@ -1145,7 +1145,7 @@ TEST(rbd_solver) {
     Node* vel = g2.createNode("attribcreate");
     vel->parm("name")->str = "v";
     vel->parm("type")->val[0] = 1;
-    vel->parm("value")->val[0] = 25;
+    vel->parm("value")->val[0] = 40;
     g2.connect(ball, vel, 0);
     Node* mg = g2.createNode("merge");
     g2.connect(fr, mg, 0);
@@ -1162,7 +1162,7 @@ TEST(rbd_solver) {
     size_t nfr = fr->geometry().numPoints();
     for (size_t i = 0; i < nfr && i < out.numPoints(); ++i) moveBy[pp ? int(pp->getF(i)) : 0] = std::max(moveBy[pp ? int(pp->getF(i)) : 0], double(length(out.P[i] - mg->geometry().P[i])));
     for (auto& [k, m] : moveBy) moved += m > 0.1;
-    CHECK(moved >= 2);
+    CHECK(moved >= 6);
     // nothing tunnels through the ground
     out.bounds(mn, mx);
     CHECK(mn.y > -0.05f);

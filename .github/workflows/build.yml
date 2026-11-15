@@ -81,7 +81,8 @@ jobs:
             choco install nsis -y --no-progress
           }
           $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(HD VERSION ([0-9.]+)').Matches[0].Groups[1].Value
-          & $makensis /V2 "/DVERSION=$version" "/DSRCDIR=dist\HD" "/DOUTFILE=dist\HD-Windows-Setup.exe" packaging\windows\installer.nsi
+          $root = (Get-Location).Path
+          & $makensis /V2 "/DVERSION=$version" "/DSRCDIR=$root\dist\HD" "/DOUTFILE=$root\dist\HD-Windows-Setup.exe" packaging\windows\installer.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package (Linux)

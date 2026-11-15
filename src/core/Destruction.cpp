@@ -389,12 +389,17 @@ bool substep(const RbdState& st, SimFrame& fr, const SimParams& sp, std::vector<
                 const Piece& PX = st.pieces[size_t(X)];
                 const Piece& PY = st.pieces[size_t(Y)];
                 Mat3 RYt = WY.R.transposed();
+                const Body& BX = bodies[size_t(WX.body)];
+                const Body& BY = bodies[size_t(WY.body)];
                 auto sample = [&](const Vec3& hv) {
                     Vec3 x = WX.pos + WX.R * hv;
                     Vec3 lp = RYt * (x - WY.pos);
                     if (dot(lp, lp) > PY.radius * PY.radius) return;
+                    // where this point was relative to Y one substep ago, to find the face it came through
+                    Vec3 vrel = (BX.sleeping ? Vec3(0) : BX.v + cross(BX.w, x - BX.x)) - (BY.sleeping ? Vec3(0) : BY.v + cross(BY.w, x - BY.x));
+                    Vec3 lprev = RYt * (x - vrel * sp.dt - WY.pos);
                     int pl = -1;
-                    float dist = PY.hull.distance(lp, &pl);
+                    float dist = PY.hull.distanceFrom(lp, lprev, &pl);
                     if (dist >= 0 || pl < 0) return;
                     Vec3 nY = WY.R * PY.hull.planes[size_t(pl)].n; // outward of Y
                     Contact c{};

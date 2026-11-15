@@ -54,6 +54,27 @@ float ConvexHull::distance(const Vec3& p, int* plane) const {
     return best;
 }
 
+float ConvexHull::distanceFrom(const Vec3& p, const Vec3& prev, int* plane) const {
+    int nearest = -1;
+    float d = distance(p, &nearest);
+    if (plane) *plane = nearest;
+    if (d >= 0) return d;
+    // among the faces prev was in front of, take the one the segment crossed last (largest entry time)
+    float bestT = -1;
+    int bi = -1;
+    for (size_t i = 0; i < planes.size(); ++i) {
+        float a = dot(planes[i].n, prev) - planes[i].d, b = dot(planes[i].n, p) - planes[i].d;
+        if (a <= 0 || b >= 0) continue;
+        float t = a / (a - b);
+        if (t > bestT) { bestT = t; bi = int(i); }
+    }
+    if (bi >= 0) {
+        if (plane) *plane = bi;
+        return dot(planes[size_t(bi)].n, p) - planes[size_t(bi)].d;
+    }
+    return d;
+}
+
 namespace {
 
 bool hullOnce(const std::vector<Vec3>& in, ConvexHull& out, double scale, bool& degenerate, Vec3& flatNormal, int& flatKind) {

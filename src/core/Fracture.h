@@ -16,6 +16,9 @@ struct ConvexHull {
     bool valid() const { return tris.size() >= 12; }
     // Signed distance (positive outside) and the face plane that achieves it.
     float distance(const Vec3& p, int* plane = nullptr) const;
+    // Like distance(), but when p is inside, the reported plane is the face the point crossed coming
+    // from prev (the deepest plane prev was outside of), not merely the nearest face.
+    float distanceFrom(const Vec3& p, const Vec3& prev, int* plane) const;
 };
 
 // Builds the hull. Flat or collinear inputs are thickened by `minThickness`

@@ -71,7 +71,7 @@
       "inputs": ["merge", null],
       "name": "rbd",
       "parms": {
-        "gluestrength": 2
+        "gluestrength": 0.800000012
       },
       "type": "rbdsolver",
       "x": 0,
