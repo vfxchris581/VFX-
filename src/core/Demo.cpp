@@ -1,0 +1,312 @@
+#include "Demo.h"
+
+namespace hd {
+
+const std::vector<DemoInfo>& demoScenes() {
+    static const std::vector<DemoInfo> d = {
+        {"terrain", "Rocky Terrain", "Noise-displaced grid with a height color ramp and rocks copied onto scattered points."},
+        {"ripples", "Animated Ripples", "Attribute Wrangle drives animated ripples and color. Press Play."},
+        {"city", "Procedural City", "Boxes copied to grid points with random per-point scale and color."},
+        {"sculpt", "Subdivided Sculpt", "Box -> PolyExtrude -> Catmull-Clark subdivision -> Mountain."},
+        {"molecule", "Wire Molecule", "Torus edges turned into tubes with spheres on every point."},
+        {"sparks", "Particle Sparks", "POP Solver: sparks burst from a moving emitter, bounce on the ground and leave trails. Press Play."},
+        {"smoke", "Smoke Plume", "Pyro Solver: smoke rises from a sphere and flows around a collider. Press Play."},
+        {"fire", "Campfire", "Pyro Solver with fire glow: hot gas cools quickly into dark smoke. Press Play."},
+        {"bounce", "Keyframed Bounce", "Keyframe animation: a ball bounces across the floor, squashing on each hit. Select 'move' to see its keys on the timeline. Press Play."},
+        {"vortex", "Particle Vortex", "POP Solver with curl-noise turbulence and a POP wrangle that spins particles into a column. Press Play."},
+    };
+    return d;
+}
+
+namespace {
+void setF(Node* n, const char* p, float v) { n->parm(p)->val[0] = v; }
+void setV(Node* n, const char* p, Vec3 v) { auto* q = n->parm(p); q->val[0] = v.x; q->val[1] = v.y; q->val[2] = v.z; }
+void setS(Node* n, const char* p, const std::string& s) { n->parm(p)->str = s; }
+} // namespace
+
+static bool buildDemoSceneImpl(Graph& g, const std::string& name) {
+    g.clear();
+    if (name == "terrain") {
+        Node* grid = g.createNode("grid", 0, 0, "ground");
+        setF(grid, "sizex", 12); setF(grid, "sizey", 12); setF(grid, "rows", 90); setF(grid, "cols", 90);
+        Node* mtn = g.createNode("mountain", 0, 70, "mountain1");
+        setF(mtn, "height", 1.4f); setF(mtn, "elementsize", 3.5f); setF(mtn, "octaves", 6);
+        g.connect(grid, mtn, 0);
+        Node* col = g.createNode("color", 0, 140, "height_ramp");
+        setF(col, "mode", 2); setV(col, "color", Vec3(0.92f, 0.9f, 0.86f)); setV(col, "color2", Vec3(0.18f, 0.32f, 0.14f));
+        g.connect(mtn, col, 0);
+        Node* sc = g.createNode("scatter", 220, 210, "scatter1");
+        setF(sc, "npts", 160); setF(sc, "pscale", 0.18f); setF(sc, "pscalevar", 0.7f); setF(sc, "seed", 3);
+        g.connect(col, sc, 0);
+        Node* rock = g.createNode("sphere", 420, 0, "rock");
+        setF(rock, "rows", 8); setF(rock, "cols", 12);
+        Node* rmtn = g.createNode("mountain", 420, 70, "rock_noise");
+        setF(rmtn, "height", 0.35f); setF(rmtn, "elementsize", 0.6f);
+        g.connect(rock, rmtn, 0);
+        Node* rcol = g.createNode("color", 420, 140, "rock_color");
+        setV(rcol, "color", Vec3(0.45f, 0.42f, 0.4f));
+        g.connect(rmtn, rcol, 0);
+        Node* cp = g.createNode("copytopoints", 330, 290, "copy_rocks");
+        setF(cp, "useCd", 0);
+        g.connect(rcol, cp, 0);
+        g.connect(sc, cp, 1);
+        Node* m = g.createNode("merge", 120, 370, "merge1");
+        g.connect(col, m, 0);
+        g.connect(cp, m, 1);
+        Node* out = g.createNode("null", 120, 440, "OUT");
+        g.connect(m, out, 0);
+        g.setDisplayNode(out);
+        return true;
+    }
+    if (name == "ripples") {
+        Node* grid = g.createNode("grid", 0, 0, "grid1");
+        setF(grid, "sizex", 10); setF(grid, "sizey", 10); setF(grid, "rows", 120); setF(grid, "cols", 120);
+        Node* w = g.createNode("attribwrangle", 0, 80, "ripples");
+        setS(w, "snippet",
+             "// Concentric ripples from two moving sources\n"
+             "vector c1 = set(sin(@Time) * 2, 0, cos(@Time * 0.7) * 2);\n"
+             "vector c2 = set(-2, 0, 1.5);\n"
+             "float d1 = distance(@P, c1);\n"
+             "float d2 = distance(@P, c2);\n"
+             "float h = sin(d1 * 5 - @Time * 6) * exp(-d1 * 0.35)\n"
+             "        + sin(d2 * 4 - @Time * 5) * exp(-d2 * 0.4);\n"
+             "@P.y = h * 0.35;\n"
+             "@Cd = hsvtorgb(set(fit(h, -1, 1, 0.62, 0.48), 0.75, fit(h, -1, 1, 0.45, 1)));\n");
+        g.connect(grid, w, 0);
+        Node* n = g.createNode("normal", 0, 160, "normal1");
+        g.connect(w, n, 0);
+        Node* out = g.createNode("null", 0, 230, "OUT");
+        g.connect(n, out, 0);
+        g.setDisplayNode(out);
+        g.frameEnd = 240;
+        return true;
+    }
+    if (name == "city") {
+        Node* grid = g.createNode("grid", 0, 0, "blocks");
+        setF(grid, "sizex", 14); setF(grid, "sizey", 14); setF(grid, "rows", 16); setF(grid, "cols", 16);
+        Node* w = g.createNode("attribwrangle", 0, 80, "building_attrs");
+        setS(w, "snippet",
+             "// Random building footprint, height and color per point\n"
+             "float r = rand(@ptnum * 1.37);\n"
+             "float centre = 1 - clamp(length(@P) / 8, 0, 1);\n"
+             "float h = 0.3 + pow(r, 3) * 4 * centre + centre * 1.2;\n"
+             "@scale = set(0.62, h, 0.62);\n"
+             "@Cd = hsvtorgb(set(0.58 + rand(@ptnum + 7) * 0.08, 0.25, 0.55 + r * 0.4));\n");
+        g.connect(grid, w, 0);
+        Node* box = g.createNode("box", 250, 0, "building");
+        setV(box, "t", Vec3(0, 0.5f, 0));
+        Node* cp = g.createNode("copytopoints", 120, 160, "copy_buildings");
+        setF(cp, "useN", 0);
+        g.connect(box, cp, 0);
+        g.connect(w, cp, 1);
+        Node* ground = g.createNode("grid", -230, 160, "ground");
+        setF(ground, "sizex", 16); setF(ground, "sizey", 16); setF(ground, "rows", 2); setF(ground, "cols", 2);
+        Node* gcol = g.createNode("color", -230, 230, "asphalt");
+        setV(gcol, "color", Vec3(0.2f, 0.21f, 0.23f));
+        g.connect(ground, gcol, 0);
+        Node* m = g.createNode("merge", 0, 300, "merge1");
+        g.connect(gcol, m, 0);
+        g.connect(cp, m, 1);
+        Node* out = g.createNode("null", 0, 370, "OUT");
+        g.connect(m, out, 0);
+        g.setDisplayNode(out);
+        return true;
+    }
+    if (name == "sculpt") {
+        Node* box = g.createNode("box", 0, 0, "box1");
+        Node* ex = g.createNode("polyextrude", 0, 70, "extrude_top");
+        setS(ex, "group", "@P.y > 0.4"); setF(ex, "dist", 0.8f);
+        g.connect(box, ex, 0);
+        Node* ex2 = g.createNode("polyextrude", 0, 140, "extrude_sides");
+        setS(ex2, "group", "abs(@P.x) > 0.45 && @P.y < 0.6"); setF(ex2, "dist", 0.5f);
+        g.connect(ex, ex2, 0);
+        Node* sub = g.createNode("subdivide", 0, 210, "subdivide1");
+        setF(sub, "iterations", 3);
+        g.connect(ex2, sub, 0);
+        Node* mtn = g.createNode("mountain", 0, 280, "detail");
+        setF(mtn, "height", 0.06f); setF(mtn, "elementsize", 0.25f);
+        g.connect(sub, mtn, 0);
+        Node* col = g.createNode("color", 0, 350, "clay");
+        setV(col, "color", Vec3(0.78f, 0.55f, 0.42f));
+        g.connect(mtn, col, 0);
+        g.setDisplayNode(col);
+        return true;
+    }
+    if (name == "molecule") {
+        Node* tor = g.createNode("torus", 0, 0, "torus1");
+        setF(tor, "rows", 16); setF(tor, "cols", 8);
+        Node* wire = g.createNode("polywire", -120, 90, "bonds");
+        setF(wire, "radius", 0.025f);
+        g.connect(tor, wire, 0);
+        Node* sph = g.createNode("sphere", 200, 0, "atom");
+        setF(sph, "rows", 10); setF(sph, "cols", 16); setV(sph, "rad", Vec3(0.07f));
+        Node* col = g.createNode("color", 120, 90, "random_color");
+        setF(col, "class", 0); setF(col, "mode", 1); setF(col, "seed", 4);
+        g.connect(tor, col, 0);
+        Node* cp = g.createNode("copytopoints", 60, 180, "atoms");
+        setF(cp, "useN", 0);
+        g.connect(sph, cp, 0);
+        g.connect(col, cp, 1);
+        Node* m = g.createNode("merge", -40, 260, "merge1");
+        g.connect(wire, m, 0);
+        g.connect(cp, m, 1);
+        Node* xf = g.createNode("xform", -40, 330, "spin");
+        xf->parm("r")->expr[1] = "$F * 1.5";
+        setV(xf, "r", Vec3(25, 0, 0));
+        g.connect(m, xf, 0);
+        g.setDisplayNode(xf);
+        return true;
+    }
+    if (name == "sparks") {
+        Node* em = g.createNode("sphere", 0, 0, "emitter");
+        setV(em, "rad", Vec3(0.12f)); setF(em, "rows", 8); setF(em, "cols", 12);
+        em->parm("t")->expr[0] = "sin($T * 2.2) * 2";
+        em->parm("t")->expr[2] = "cos($T * 1.6) * 1.5";
+        setV(em, "t", Vec3(0, 1.6f, 0));
+        Node* pop = g.createNode("popsolver", 0, 80, "sparks");
+        setF(pop, "rate", 2500); setF(pop, "life", 1.8f); setF(pop, "lifevar", 0.6f);
+        setF(pop, "speedn", 3.2f); setF(pop, "velvar", 1.4f); setV(pop, "vel", Vec3(0, 2.5f, 0));
+        setF(pop, "drag", 0.25f); setF(pop, "bounce", 0.45f); setF(pop, "friction", 0.25f);
+        setF(pop, "pscale", 0.022f); setF(pop, "pscaleend", 0.3f);
+        setV(pop, "color", Vec3(1.6f, 1.25f, 0.55f)); setV(pop, "color2", Vec3(0.75f, 0.08f, 0.02f));
+        g.connect(em, pop, 0);
+        Node* tr = g.createNode("trail", 0, 160, "streaks");
+        setF(tr, "length", 0.035f); setF(tr, "keeppts", 1);
+        g.connect(pop, tr, 0);
+        Node* glow = g.createNode("material", 0, 240, "glow");
+        setF(glow, "class", 1); setF(glow, "emit", 6);
+        g.connect(tr, glow, 0);
+        Node* ground = g.createNode("grid", 230, 80, "ground");
+        setF(ground, "sizex", 12); setF(ground, "sizey", 12); setF(ground, "rows", 2); setF(ground, "cols", 2);
+        Node* gc = g.createNode("color", 230, 160, "floor_color");
+        setV(gc, "color", Vec3(0.16f, 0.17f, 0.19f));
+        g.connect(ground, gc, 0);
+        Node* m = g.createNode("merge", 110, 320, "merge1");
+        g.connect(gc, m, 0);
+        g.connect(glow, m, 1);
+        g.connect(em, m, 2);
+        Node* out = g.createNode("null", 110, 390, "OUT");
+        g.connect(m, out, 0);
+        g.setDisplayNode(out);
+        g.frameEnd = 240;
+        return true;
+    }
+    if (name == "smoke" || name == "fire") {
+        const bool fire = name == "fire";
+        Node* src = g.createNode("sphere", 0, 0, "source");
+        setV(src, "rad", fire ? Vec3(0.45f, 0.14f, 0.45f) : Vec3(0.42f, 0.25f, 0.42f)); setV(src, "t", Vec3(0, fire ? 0.16f : 0.3f, 0));
+        Node* pyro = g.createNode("pyrosolver", 90, 90, fire ? "fire" : "smoke");
+        g.connect(src, pyro, 0);
+        Node* m = g.createNode("merge", 160, 180, "merge1");
+        g.connect(pyro, m, 0);
+        if (fire) {
+            setV(pyro, "center", Vec3(0, 2, 0)); setV(pyro, "size", Vec3(3, 4, 3)); setF(pyro, "voxelsize", 0.06f);
+            setF(pyro, "sourcedensity", 0.5f); setF(pyro, "sourcetemp", 1.6f);
+            setF(pyro, "buoyancy", 6); setF(pyro, "cooling", 2.6f); setF(pyro, "dissipation", 0.9f);
+            setF(pyro, "turb", 2.5f); setF(pyro, "turbfreq", 2.2f); setF(pyro, "turbspeed", 1.2f); setF(pyro, "vorticity", 5);
+            setV(pyro, "color", Vec3(0.16f, 0.15f, 0.15f)); setF(pyro, "rdensity", 1.3f); setF(pyro, "fire", 2.2f);
+            Node* logs = g.createNode("torus", 300, 0, "stones");
+            setF(logs, "rad1", 0.62f); setF(logs, "rad2", 0.12f); setF(logs, "rows", 14); setF(logs, "cols", 8); setV(logs, "t", Vec3(0, 0.1f, 0));
+            Node* lc = g.createNode("color", 300, 90, "stone_color");
+            setV(lc, "color", Vec3(0.3f, 0.29f, 0.28f));
+            g.connect(logs, lc, 0);
+            g.connect(lc, m, 1);
+        } else {
+            Node* col = g.createNode("sphere", 200, 0, "collider");
+            setV(col, "rad", Vec3(0.5f)); setV(col, "t", Vec3(0.12f, 2.1f, 0));
+            g.connect(col, pyro, 1);
+            Node* cc = g.createNode("color", 300, 90, "collider_color");
+            setV(cc, "color", Vec3(0.75f, 0.42f, 0.2f));
+            g.connect(col, cc, 0);
+            Node* mat = g.createNode("material", 300, 150, "copper");
+            setF(mat, "rough", 0.3f); setF(mat, "metal", 1);
+            g.connect(cc, mat, 0);
+            g.connect(mat, m, 1);
+            setF(pyro, "buoyancy", 5); setF(pyro, "dissipation", 0.06f); setF(pyro, "cooling", 0.35f); setF(pyro, "weight", 0.2f);
+            setF(pyro, "turb", 1.6f); setF(pyro, "vorticity", 5); setF(pyro, "rdensity", 1.6f); setF(pyro, "voxelsize", 0.065f);
+        }
+        Node* ground = g.createNode("grid", 440, 0, "ground");
+        setF(ground, "sizex", 4.5f); setF(ground, "sizey", 4.5f); setF(ground, "rows", 2); setF(ground, "cols", 2);
+        Node* gc = g.createNode("color", 440, 90, "floor_color");
+        setV(gc, "color", Vec3(0.2f, 0.21f, 0.23f));
+        g.connect(ground, gc, 0);
+        g.connect(gc, m, 2);
+        Node* out = g.createNode("null", 160, 260, "OUT");
+        g.connect(m, out, 0);
+        g.setDisplayNode(out);
+        g.frameEnd = 240;
+        return true;
+    }
+    if (name == "bounce") {
+        Node* ball = g.createNode("sphere", 0, 0, "ball");
+        setV(ball, "rad", Vec3(0.5f)); setF(ball, "rows", 16); setF(ball, "cols", 32);
+        Node* col = g.createNode("color", 0, 70, "red");
+        setV(col, "color", Vec3(0.85f, 0.2f, 0.15f));
+        g.connect(ball, col, 0);
+        Node* sq = g.createNode("xform", 0, 140, "squash");
+        g.connect(col, sq, 0);
+        Node* mv = g.createNode("xform", 0, 210, "move");
+        g.connect(sq, mv, 0);
+        // travel: steady left to right
+        mv->parm("t")->setKey(0, 1, -4.5f, 1);
+        mv->parm("t")->setKey(0, 96, 4.5f, 1);
+        // height: each bounce a little lower; squash at every floor contact
+        const float peaks[] = {3.2f, 2.3f, 1.6f, 1.0f};
+        for (int b = 0; b < 4; ++b) {
+            float top = float(1 + b * 24), hit = top + 12;
+            mv->parm("t")->setKey(1, top, peaks[b], 0);
+            mv->parm("t")->setKey(1, hit, 0.36f, 0);
+            for (int c = 0; c < 3; ++c) {
+                float squashed = c == 1 ? 0.72f : 1.18f;
+                sq->parm("s")->setKey(c, hit - 3, 1, 0);
+                sq->parm("s")->setKey(c, hit, squashed, 0);
+                sq->parm("s")->setKey(c, hit + 3, 1, 0);
+            }
+        }
+        mv->parm("t")->setKey(1, 96, 0.5f, 0);
+        Node* ground = g.createNode("grid", 240, 140, "ground");
+        setF(ground, "sizex", 12); setF(ground, "sizey", 5); setF(ground, "rows", 2); setF(ground, "cols", 2);
+        Node* gc = g.createNode("color", 240, 210, "floor_color");
+        setV(gc, "color", Vec3(0.24f, 0.25f, 0.27f));
+        g.connect(ground, gc, 0);
+        Node* m = g.createNode("merge", 120, 290, "merge1");
+        g.connect(mv, m, 0);
+        g.connect(gc, m, 1);
+        Node* out = g.createNode("null", 120, 360, "OUT");
+        g.connect(m, out, 0);
+        g.setDisplayNode(out);
+        g.frameEnd = 96;
+        return true;
+    }
+    if (name == "vortex") {
+        Node* em = g.createNode("circle", 0, 0, "emitter");
+        setF(em, "rad", 1.2f); setF(em, "divs", 32);
+        Node* pop = g.createNode("popsolver", 0, 80, "vortex");
+        setF(pop, "rate", 6000); setF(pop, "life", 4.5f); setF(pop, "lifevar", 0.4f);
+        setF(pop, "speedn", 0.6f); setF(pop, "velvar", 0.25f);
+        setV(pop, "gravity", Vec3(0, 1.3f, 0)); setF(pop, "drag", 1.2f);
+        setF(pop, "turb", 1.0f); setF(pop, "turbfreq", 0.55f); setF(pop, "turbspeed", 0.4f);
+        setF(pop, "ground", 0);
+        setF(pop, "pscale", 0.03f); setF(pop, "pscaleend", 0.25f);
+        setV(pop, "color", Vec3(0.35f, 0.85f, 1.3f)); setV(pop, "color2", Vec3(0.75f, 0.15f, 0.9f));
+        setS(pop, "snippet",
+             "// Spin around the Y axis and pull gently toward it\n"
+             "vector axis = set(0, 1, 0);\n"
+             "vector r = set(@P.x, 0, @P.z);\n"
+             "@v += cross(axis, r) * @TimeInc * 3;\n"
+             "@v -= r * @TimeInc * 4.5;\n");
+        g.connect(em, pop, 0);
+        g.setDisplayNode(pop);
+        g.frameEnd = 240;
+        return true;
+    }
+    return false;
+}
+
+bool buildDemoScene(Graph& g, const std::string& name) {
+    if (!buildDemoSceneImpl(g, name)) return false;
+    for (auto& n : g.nodes()) { n->x *= 1.4f; n->y *= 1.15f; } // room for wide node labels
+    return true;
+}
+
+} // namespace hd
