@@ -7,23 +7,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Variants
+      - name: Valgrind
         run: |
-          g++ --version | head -1
+          sudo apt-get update -qq && sudo apt-get install -y -qq valgrind > /dev/null
           HEX=073c71a6db10457aafe4194e83b801000000c1f6ffffffff
-          try() {
-            name="$1"; shift
-            if g++ -std=c++17 "$@" -Isrc -Isrc/core tests/fuzz.cpp src/core/*.cpp -lpthread -ldl -rdynamic -o fz_$name 2> build_$name.log; then
-              HD_NO_PYTHON=1 HD_FUZZ_ONLY=boolean HD_FUZZ_REPLAY=$HEX ./fz_$name 1 > out_$name.log 2>&1 && echo "== $name: ok" || { echo "== $name: FAIL"; grep -v "inputs ok" out_$name.log | head -60; }
-            else echo "== $name: build failed"; tail -5 build_$name.log; fi
-          }
-          try O3 -O3 -DNDEBUG &
-          try O2 -O2 -DNDEBUG &
-          try O3asan -O3 -g -DNDEBUG -fsanitize=address,undefined &
-          try O3novec -O3 -DNDEBUG -fno-tree-vectorize &
-          wait
-          try O3noalias -O3 -DNDEBUG -fno-strict-aliasing &
-          try O3wrapv -O3 -DNDEBUG -fwrapv &
-          try O3assert -O3 -g -D_GLIBCXX_ASSERTIONS -D_GLIBCXX_DEBUG &
-          try O3noipa -O3 -DNDEBUG -fno-inline &
-          wait
+          g++ -std=c++17 -O2 -g -DNDEBUG -Isrc -Isrc/core tests/fuzz.cpp src/core/*.cpp -lpthread -ldl -o fz
+          HD_NO_PYTHON=1 HD_FUZZ_ONLY=boolean HD_FUZZ_REPLAY=$HEX valgrind -q --num-callers=30 ./fz 1 2>&1 | grep -v "inputs ok" | grep -v zlibCompress | head -150 || true
