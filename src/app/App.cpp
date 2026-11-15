@@ -3,6 +3,9 @@
 #include "core/Demo.h"
 #include "core/GeoIO.h"
 #include "core/Version.h"
+#include <sstream>
+#include <fstream>
+#include "core/Python.h"
 #include "render/GL.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -150,6 +153,23 @@ void App::restore(const Snapshot& s) {
     for (auto& name : s.selected)
         if (Node* n = net().findNode(name)) selection.insert(n->id());
     if (Node* c = net().findNode(s.current)) currentId = c->id();
+}
+
+bool App::runPython(const std::string& code, const std::string& name, bool shell) {
+    Snapshot before = snapshot();
+    std::string out;
+    bool ok = python::run(graph, code, out, name, shell);
+    pythonLog += out;
+    pythonLog += python::takeLog();
+    if (pythonLog.size() > 2000000) pythonLog.erase(0, pythonLog.size() - 2000000);
+    Snapshot after = snapshot();
+    if (after.graph != before.graph) { // one undo step for the whole script
+        redo_.clear();
+        undo_.push_back(std::move(before));
+        if (undo_.size() > 200) undo_.erase(undo_.begin());
+        dirty_ = true;
+    }
+    return ok;
 }
 
 void App::checkpoint() {
@@ -423,6 +443,7 @@ void App::frame() {
     if (showNetwork) network.draw(*this);
     if (showParms) drawParameters();
     if (showSpreadsheet) drawSpreadsheet();
+    if (showPythonShell) drawPythonShell();
     if (showTimeline) drawTimeline();
     stepSequence();
     if (showRenderView) drawRenderView();
@@ -468,6 +489,7 @@ void App::buildDefaultLayout(unsigned dockIdIn) {
     ImGui::DockBuilderDockWindow("Scene View", dockId);
     ImGui::DockBuilderDockWindow("Render View", dockId);
     ImGui::DockBuilderDockWindow("Geometry Spreadsheet", dockId);
+    ImGui::DockBuilderDockWindow("Python Shell", dockId);
     ImGui::DockBuilderDockWindow("Parameters", right);
     ImGui::DockBuilderDockWindow("Network", rightBottom);
     ImGui::DockBuilderDockWindow("Timeline", bottom);
@@ -505,7 +527,7 @@ void App::drawFileDialog() {
     }
     ImGui::SetNextWindowSize(ImVec2(640, 460), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal("File Browser", nullptr)) return;
-    const char* titles[] = {"", "Open Scene", "Save Scene As", "Import OBJ", "Export Geometry (.obj / .ply)", "Choose File", "Save Rendered Image", "Render Sequence To (frame numbers are added)", "Merge Scene", "Install Asset", "Export USD"};
+    const char* titles[] = {"", "Open Scene", "Save Scene As", "Import OBJ", "Export Geometry (.obj / .ply)", "Choose File", "Save Rendered Image", "Render Sequence To (frame numbers are added)", "Merge Scene", "Install Asset", "Export USD", "Run Python Script"};
     ImGui::TextUnformatted(titles[int(fileMode_)]);
     ImGui::Separator();
     bool saving = fileMode_ == FileDialogMode::SaveAs || fileMode_ == FileDialogMode::ExportObj || fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence || fileMode_ == FileDialogMode::ExportUsd;
@@ -516,6 +538,7 @@ void App::drawFileDialog() {
     else if (fileMode_ == FileDialogMode::InstallAsset) exts = {".hda"};
     else if (fileMode_ == FileDialogMode::ExportUsd) exts = {".usda"};
     else if (fileMode_ == FileDialogMode::ImportObj) exts = {".obj", ".usda"};
+    else if (fileMode_ == FileDialogMode::RunPython) exts = {".py"};
     else if (fileMode_ == FileDialogMode::ChooseFileParm) {
         // image parameters (texture and environment maps) browse images; others browse geometry
         std::string pn = fileParmTarget.substr(fileParmTarget.find('/') + 1);
@@ -623,6 +646,16 @@ void App::drawFileDialog() {
             break;
         }
         case FileDialogMode::MergeScene: mergeScene(chosen); break;
+        case FileDialogMode::RunPython: {
+            std::ifstream f(chosen, std::ios::binary);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            showPythonShell = true;
+            pythonLog += "# run " + chosen + "\n";
+            bool ok = runPython(ss.str(), chosen, false);
+            status(ok ? "Ran " + chosen : "Python script failed (see the Python Shell)", !ok);
+            break;
+        }
         case FileDialogMode::ExportUsd: {
             Node* d = net().displayNode();
             bool ok = false;

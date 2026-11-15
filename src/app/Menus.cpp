@@ -243,6 +243,8 @@ void App::drawMenuBar() {
         ImGui::Separator();
         if (ImGui::MenuItem("Merge...")) openFileDialog(FileDialogMode::MergeScene);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add the nodes of another scene file to this one");
+        if (ImGui::MenuItem("Run Python Script...")) openFileDialog(FileDialogMode::RunPython);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Runs a .py file with the hd module against this scene (one undo step)");
         if (ImGui::BeginMenu("Import")) {
             if (ImGui::MenuItem("Geometry (.obj / .usda)...")) openFileDialog(FileDialogMode::ImportObj);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Adds a File node. USD: meshes, points and curves from text .usda files");
@@ -347,7 +349,7 @@ void App::drawMenuBar() {
         ImGui::MenuItem("Display Options", "D", &showDisplayOptions);
         ImGui::MenuItem("Render Settings", nullptr, &showRenderSettings);
         ImGui::Separator();
-        unavailable("Python Shell");
+        ImGui::MenuItem("Python Shell", nullptr, &showPythonShell);
         unavailable("Hscript Textport");
         ImGui::EndMenu();
     }

@@ -168,3 +168,15 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Example | `examples/wreckingball.hdg`: a steel ball on a world pin swings into a glued, fractured brick wall |
 | Limits | Not done: joint angle limits, cone-twist and slider joints; springs are explicit, so very stiff springs need more substeps; the pivot of a pin between two pieces is the middle of its line |
 
+## Phase 11: Python scripting
+
+| Item | Status |
+|---|---|
+| Embedding | Working: HD loads the user's Python 3 (3.8+) at runtime and uses only stable-ABI functions, so one build works with any Python 3.8+ and HD has no build-time Python dependency. Found through HD_PYTHON, PATH and the usual macOS install places; a Python without a shared library (static builds) is reported clearly. Tested locally with Python 3.11, 3.12 and 3.13; CI runs the Python tests with Python 3.12 on macOS, Windows and Linux, and runs a script from each installed package |
+| `hd` module | Working: nodes (create, find, rename, delete, wire, display flag, position, subnet children), parameters (read evaluated values, set numbers/vectors/strings/menu labels, expressions, keyframes), cooking with errors as exceptions, frame/fps/range, save/load/clear, node types, and geometry (positions, points, polygons and polylines, point/prim attributes, bounds, delete points, merge, normals) |
+| Python Shell | Working: interactive prompt with echo of expression values, shared namespace, history, tracebacks; each command is one undo step. Tested in the headless app test (create a node, check it, undo it) |
+| Run Python Script / `hdc python` | Working: run a .py file or a line against the open or a loaded scene, optionally saving the result |
+| Python SOP | Working: `geo` (output), `inputs` (read-only), `node`; errors become node errors; `print` goes to the Python Shell (and to the terminal from hdc); `hd.frame()` makes it time dependent. Tested: deform, build from nothing with attributes, two inputs, read-only inputs, syntax errors, frame dependence, 250k points |
+| Examples | `examples/scripts`: a ring of packed spheres built in Python, a scene report, a simulation wedge |
+| Limits | Not done: Python-defined node types, shelf tools and callbacks on parameter changes; packed-prim and volume contents aren't exposed to Python; `import hd` from a separate Python process isn't supported (scripts run inside HD or hdc); the sanitizer CI job runs without Python (an embedded interpreter keeps objects until exit) |
+

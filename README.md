@@ -60,7 +60,7 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 - **Lights and cameras.** Camera, Point, Spot, Area, Distant and Environment lights, plus Sky Light (sun and sky) and Ambient Light on the shelf. They are scene-level nodes, like Houdini objects: every light or camera in the top-level network is part of the scene without being wired in, and bypassing one turns it off. Shelf lights are placed and aimed at whatever is displayed. Lights show as icons in the viewport and light the Render View (not the viewport's own shading); once a scene has any light, the default sun and sky are no longer used. Pick a camera from the Scene View's camera menu to look through it; **Lock** makes view navigation move the camera, and the Render View renders through the active camera at its resolution. **Camera** on the shelf creates one from the current view. Camera roll (Z rotation) is ignored. Geometry, Volume, GI, Caustic and Portal lights and stereo/VR cameras are greyed out.
 - **Subnetworks.** Select nodes and press **Shift+C** to collapse them into a single Subnetwork node, wired in their place. Double-click it (or press **I**) to dive in and edit; **U** or the breadcrumb at the top of the Network goes back up. Outside wires arrive through Subnet Input nodes (up to 4) and the Output node is the result. Subnets nest, save with the scene, and can contain simulations.
 - **Assets.** Right-click a subnet and choose **Save As Asset** to store it in your asset folder (`~/.hd_assets`). Assets appear in the Tab menu under **Assets** in every scene, and the **Assets** menu has an Asset Manager and an installer for `.hda` files from someone else. Each asset you add is an independent copy: editing it doesn't change the saved asset or other copies, and assets don't expose parameters on the outside yet.
-- **Menus.** The menu bar follows Houdini's layout: **File** (recent files, Save and Increment, Revert, Merge, Import, Export), **Edit** (cut, copy, paste, preferences), **Render**, **Assets**, **Windows** (show or hide each pane, reset the layout) and **Help**. Entries for things HD doesn't have yet (Alembic/FBX/USD, render nodes, Python shell) are greyed out.
+- **Menus.** The menu bar follows Houdini's layout: **File** (recent files, Save and Increment, Revert, Merge, Import, Export), **Edit** (cut, copy, paste, preferences), **Render**, **Assets**, **Windows** (show or hide each pane, reset the layout) and **Help**. Entries for things HD doesn't have yet (Alembic/FBX, render nodes) are greyed out.
 - **Display Options.** Press **D** in the viewport. The Grid tab sets the ground reference plane (on/off, XZ/XY/YZ, origin, spacing, size, ruler lines, opacity); other tabs cover markers, shading and background colors. These settings are remembered between sessions.
 - **Geometry Spreadsheet.** Shows every point and primitive attribute of the selected node.
 - **Timeline.** Play, step, set the frame range and fps.
@@ -168,9 +168,35 @@ v@vel = curlnoise(@P * 0.5);                 // new vector attribute
 - Functions: `sin cos tan asin acos atan atan2 sqrt abs floor ceil frac rint pow exp log min max clamp fit fit01 lerp smooth length normalize distance dot cross set noise curlnoise rand hsvtorgb degrees radians sign mod`.
 - Parameter expressions use `$F`, `$T`, `$FPS` and `$PI`, plus all of the functions above.
 
+## Python scripting
+
+HD uses the Python 3 (3.8 or newer) installed on your computer; nothing is bundled and any Python 3.8+ works. It looks for `python3`/`python` on PATH (on macOS also Homebrew and python.org installs); set `HD_PYTHON` to a python executable to pick one. `hdc python --info` shows what was found.
+
+- **Python Shell** (Windows → Python Shell): an interactive prompt on the open scene. Enter runs, Ctrl+Enter adds a line, Ctrl+Up/Down recall commands. Everything a command changes is one undo step.
+- **File → Run Python Script...** and `hdc python script.py [scene.hdg] [--save out.hdg]` run a file; `hdc python -c "..."` runs a line.
+- **Python SOP** (the `python` node): edits geometry with code. `geo` is its output (a copy of input 1), `inputs` the read-only input geometry, `node` the node itself. Code that calls `hd.frame()` makes the node follow the timeline.
+
+```python
+import hd
+box = hd.createNode("box")
+box.parm("size").set((2, 1, 1))
+xf = hd.createNode("xform")
+xf.setInput(0, box)
+xf.parm("t").setExpression("sin($F * 0.1)", 1)
+xf.parm("r").setKeyframe(1, 0, 1)
+xf.parm("r").setKeyframe(48, 360, 1)
+xf.setDisplayFlag()
+geo = xf.geometry()                      # read-only; cooks the node
+print(geo.numPoints(), geo.boundingBox())
+print(geo.attribNames("prim"), hd.frameRange())
+hd.save("scene.hdg")
+```
+
+Main calls: `hd.node(name)`, `hd.nodes()`, `hd.createNode(type, name)`, `hd.nodeTypes()`, `hd.setFrame(f)`, `hd.frameRange()`, `hd.displayNode()`, `hd.save/load/clearScene`; `Node`: `parm/parms/setParms/evalParm`, `setInput/inputs/outputs`, `setDisplayFlag`, `cook/errors/warnings`, `geometry`, `setName/destroy`, `createNode/children` (subnets); `Parm`: `eval/set/setExpression/setKeyframe/keyframes`; `Geometry`: `pointPositions/setPointPositions`, `addPoints/addPolygon/addPolyline/prims`, `attribNames/attribValues/setAttribValues/removeAttrib`, `boundingBox`, `deletePoints`, `merge`, `computeNormals`. `help(hd)` in the shell lists everything. Example scripts are in `examples/scripts`.
+
 ## Examples
 
-`examples/` contains `terrain`, `ripples` (animated), `city`, `sculpt`, `molecule`, the keyframed `bounce`, the particle scenes `sparks` and `vortex`, the pyro scenes `smoke` and `fire`, `destruction` (a ball breaking a wall), `dambreak` (FLIP), `cloth` (Vellum), `ocean`, and `materials` (glass, gold, wax and a textured box under an HDRI; textures in `examples/assets`), `rig` (a skinned arm following an IK target), `mocap` (a BVH clip) and `comp` (a render graded, glowed and defocused over a background). Press Play for the simulations. The same scenes are available inside the app under **File → Open Example**.
+`examples/` contains `terrain`, `ripples` (animated), `city`, `sculpt`, `molecule`, the keyframed `bounce`, the particle scenes `sparks` and `vortex`, the pyro scenes `smoke` and `fire`, `destruction` (a ball breaking a wall), `dambreak` (FLIP), `cloth` (Vellum), `ocean`, and `materials` (glass, gold, wax and a textured box under an HDRI; textures in `examples/assets`), `rig` (a skinned arm following an IK target), `mocap` (a BVH clip) and `comp` (a render graded, glowed and defocused over a background), `forest` (12,000 packed trees) and `wreckingball` (RBD constraints). `examples/scripts` has Python scripts. Press Play for the simulations. The same scenes are available inside the app under **File → Open Example**.
 
 ## Command line (`hdc`)
 
@@ -187,6 +213,8 @@ hdc image examples/comp.hdg comp.$F4.png --frames 1 24        # write a comp seq
 hdc usd examples/rig.hdg rig.usda --frames 1 48               # animated USD export
 hdc demo terrain my_scene.hdg               # write a demo scene
 hdc bench [--quick]                         # time every major subsystem
+hdc python examples/scripts/ring_of_spheres.py --save ring.hdg   # run Python with the hd module
+hdc python --info                           # which Python HD uses
 hdc --version                               # version, commit and platform
 ```
 
@@ -219,4 +247,4 @@ A node recooks only when its parameters, inputs or bypass state change, or when 
 9. ~~Optimization and stability (Phase 7)~~ — done: benchmarks, sanitizer CI, fuzzing, headless app smoke test, FLIP 2.1x and Vellum 1.5x faster. Pyro and the viewport material preview followed. Next: soak tests.
 10. ~~Installers and releases (Phase 8)~~ — done: icons, file associations, version info, install-tested packages in CI, tagged GitHub Releases. Next: code signing/notarization (needs the owner's certificates), AppImage, auto-update.
 4. ~~Path-traced render view~~ and ~~materials, textures, HDRI, DOF, motion blur, EXR, denoising~~ — done. Next for rendering: node-based shader networks, displacement, Cryptomatte, render layers, GPU rendering.
-5. ~~Subnetworks and assets~~ — done. Next: parameters promoted to the outside of a subnet, linked (locked) assets, Python scripting.
+5. ~~Subnetworks and assets~~ and ~~Python scripting (Phase 11)~~ — done. Next: parameters promoted to the outside of a subnet, linked (locked) assets, Python-defined node types and shelf tools.

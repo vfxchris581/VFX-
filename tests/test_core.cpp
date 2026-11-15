@@ -10,9 +10,11 @@
 #include "core/Image.h"
 #include "core/Lights.h"
 #include "core/Node.h"
+#include "core/Python.h"
 #include "core/Ops.h"
 #include "core/PathTracer.h"
 #include "core/Volume.h"
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <cmath>
@@ -560,6 +562,8 @@ TEST(all_nodes_cook_on_defaults) {
         // reject a plain sphere with a clear error; they still must not crash or produce broken geometry
         static const std::set<std::string> picky = {"file", "switch", "fkpose", "ikchain", "capture", "bonedeform", "blendshapes", "bvhimport", "retarget",
                                                    "copfile", "copzcomp", "copdefocus" /* need a file or depth */};
+        // the Python SOP needs an installed Python; without one it must say so (and not crash)
+        if (t.name == "python" && !python::available()) { CHECK(n->error().find("Python") != std::string::npos); continue; }
         if (!picky.count(t.name) && !n->error().empty())
             std::printf("  node %s error: %s\n", t.name.c_str(), n->error().c_str());
         CHECK(picky.count(t.name) || n->error().empty());
@@ -2725,6 +2729,166 @@ TEST(rbd_packed_pieces) {
     { Geometry u = r->geometry(); u.unpack(); u.bounds(mn, mx); } // exact (packed bounds are conservative boxes)
     if (!(mn.y > -0.05f && mx.y < 1.3f)) std::printf("  packed fracture bounds y %.3f .. %.3f\n", mn.y, mx.y);
     CHECK(mn.y > -0.05f && mx.y < 1.3f); // fell from 1.5 m and settled on the ground
+}
+
+// ---------------------------------------------------------------- Python (phase 11)
+static bool pythonOrSkip() {
+    const python::Info& inf = python::ensure();
+    if (!inf.ok) {
+        std::printf("  python: %s\n", inf.error.c_str());
+        if (std::getenv("HD_REQUIRE_PYTHON")) { CHECK(inf.ok); }
+        else std::printf("  (skipped: set HD_REQUIRE_PYTHON=1 to make this a failure)\n");
+        return false;
+    }
+    return true;
+}
+
+TEST(python_api) {
+    if (!pythonOrSkip()) return;
+    Graph g;
+    std::string out;
+    bool ok = python::run(g, R"PY(
+import hd
+box = hd.createNode("box", "crate")
+assert box.name() == "crate" and box.type() == "box"
+box.parm("size").set((2, 1, 1))
+assert box.parm("size").eval() == (2.0, 1.0, 1.0)
+xf = hd.createNode("xform")
+xf.setInput(0, box)
+assert xf.inputs()[0] == box and box.outputs() == [xf]
+xf.parm("t").setExpression("$F * 0.5", 1)
+xf.parm("s").set((1, 2, 1))
+xf.setDisplayFlag()
+assert hd.displayNode() == xf
+hd.setFrame(4)
+assert abs(xf.parm("t").eval()[1] - 2.0) < 1e-6
+g = xf.geometry()
+assert g.numPoints() == 8 and g.numPrims() == 6
+lo, hi = g.boundingBox()
+assert abs(lo[1] - 1.0) < 1e-5 and abs(hi[1] - 3.0) < 1e-5, (lo, hi)
+# keyframes and menus
+xf.parm("r").setKeyframe(1, 0, 1)
+xf.parm("r").setKeyframe(11, 100, 1)
+assert len(xf.parm("r").keyframes(1)) == 2
+hd.setFrame(11)
+assert abs(xf.parm("r").eval()[1] - 100) < 1e-4
+# errors are Python exceptions
+for bad in (lambda: hd.createNode("no_such_type"), lambda: box.parm("size").set(3), lambda: xf.setInput(5, box)):
+    try:
+        bad()
+        raise AssertionError("expected an error")
+    except (ValueError, IndexError):
+        pass
+assert hd.node("missing") is None
+# rename, destroy
+box.setName("crate2")
+assert hd.node("crate2") is not None and xf.inputs()[0].name() == "crate2"
+tmp = hd.createNode("sphere")
+tmp.destroy()
+assert hd.node(tmp.name()) is None
+print("api ok", len(hd.nodeTypes()))
+)PY", out);
+    if (!ok) std::printf("%s\n", out.c_str());
+    CHECK(ok);
+    CHECK(out.find("api ok") != std::string::npos);
+    // the script really changed the graph
+    Node* xf = g.findNode("xform1");
+    CHECK(xf && g.displayNode() == xf && xf->inputs[0] && xf->inputs[0]->name() == "crate2");
+    // save from Python, load back
+    out.clear();
+    CHECK(python::run(g, "import hd\nhd.save('py_scene.hdg')", out));
+    Graph g2;
+    std::string err;
+    CHECK(g2.load("py_scene.hdg", &err) && g2.findNode("crate2") && g2.findNode("xform1"));
+    std::remove("py_scene.hdg");
+
+    // shell: values are echoed, names persist, errors print a traceback and return false
+    out.clear();
+    CHECK(python::run(g, "answer = 6 * 7", out, "<shell>", true));
+    CHECK(python::run(g, "answer", out, "<shell>", true));
+    CHECK(out.find("42") != std::string::npos);
+    out.clear();
+    CHECK(!python::run(g, "1 / 0", out, "<shell>", true));
+    CHECK(out.find("ZeroDivisionError") != std::string::npos);
+    out.clear();
+    CHECK(!python::run(g, "def broken(:", out));
+    CHECK(out.find("SyntaxError") != std::string::npos);
+}
+
+TEST(python_sop) {
+    if (!pythonOrSkip()) return;
+    Graph g;
+    // deform the input
+    Node* grid = g.createNode("grid");
+    Node* py = g.createNode("python");
+    g.connect(grid, py, 0);
+    py->parm("code")->str = "P = geo.pointPositions()\ngeo.setPointPositions([(x, y + x * x, z) for x, y, z in P])\n";
+    g.cook(py);
+    CHECK(py->error().empty());
+    const Geometry& a = py->geometry();
+    CHECK(a.numPoints() == grid->geometry().numPoints() && a.numPrims() == grid->geometry().numPrims());
+    bool same = true;
+    for (size_t i = 0; i < a.numPoints(); ++i) {
+        Vec3 p = grid->geometry().P[i];
+        same = same && std::fabs(a.P[i].y - (p.y + p.x * p.x)) < 1e-5f;
+    }
+    CHECK(same);
+    // build geometry from nothing, with attributes
+    Node* gen = g.createNode("python");
+    gen->parm("code")->str = R"PY(
+import math
+n = 12
+first = geo.addPoints([(math.cos(i * 2 * math.pi / n), 0, math.sin(i * 2 * math.pi / n)) for i in range(n)])
+geo.addPolygon(range(first, first + n))
+geo.setAttribValues("Cd", [(i / n, 0.5, 1 - i / n) for i in range(n)])
+geo.setAttribValues("id", [float(i) for i in range(geo.numPrims())], cls="prim")
+print("made", geo.numPoints())
+)PY";
+    g.cook(gen);
+    CHECK(gen->error().empty());
+    const Geometry& b = gen->geometry();
+    CHECK(b.numPoints() == 12 && b.numPrims() == 1 && b.prims[0].count == 12);
+    const Attrib* cd = b.findAttrib(AttribClass::Point, "Cd");
+    CHECK(cd && cd->tuple == 3 && std::fabs(cd->getV(6).x - 0.5f) < 1e-6f);
+    CHECK(b.findAttrib(AttribClass::Prim, "id"));
+    CHECK(python::takeLog().find("[python2] made 12") != std::string::npos);
+    // inputs are read-only; errors become the node's error
+    Node* bad = g.createNode("python");
+    g.connect(grid, bad, 0);
+    bad->parm("code")->str = "inputs[0].setPointPositions([])";
+    g.cook(bad);
+    CHECK(bad->error().find("read-only") != std::string::npos);
+    bad->parm("code")->str = "def broken(:";
+    bad->touch();
+    g.cook(bad);
+    CHECK(bad->error().find("SyntaxError") != std::string::npos);
+    // two inputs; hd.frame() makes the node follow the timeline
+    Node* sph = g.createNode("sphere");
+    Node* two = g.createNode("python");
+    g.connect(grid, two, 0);
+    g.connect(sph, two, 1);
+    two->parm("code")->str = "import hd\ngeo.merge(inputs[1])\ngeo.setAttribValues('f', [hd.frame()] * geo.numPoints())\n";
+    CHECK(two->isTimeDependent());
+    g.frame = 7;
+    g.cook(two);
+    CHECK(two->error().empty() && two->geometry().numPoints() == grid->geometry().numPoints() + sph->geometry().numPoints());
+    const Attrib* f = two->geometry().findAttrib(AttribClass::Point, "f");
+    CHECK(f && f->getF(0) == 7.f);
+    g.frame = 9;
+    g.cook(two);
+    f = two->geometry().findAttrib(AttribClass::Point, "f");
+    CHECK(f && f->getF(0) == 9.f);
+    // scale: 250k points through Python in reasonable time
+    Node* big = g.createNode("grid");
+    big->parm("rows")->val[0] = 500; big->parm("cols")->val[0] = 500;
+    Node* bump = g.createNode("python");
+    g.connect(big, bump, 0);
+    bump->parm("code")->str = "geo.setPointPositions([(x, 0.1, z) for x, y, z in geo.pointPositions()])";
+    auto t0 = std::chrono::steady_clock::now();
+    g.cook(bump);
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(bump->error().empty() && bump->geometry().numPoints() == 250000 && bump->geometry().P[1234].y == 0.1f);
+    CHECK(ms < 5000);
 }
 
 int main() {

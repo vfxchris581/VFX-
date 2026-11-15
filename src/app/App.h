@@ -48,7 +48,7 @@ private:
     void drawNodeMenu(App& app);
 };
 
-enum class FileDialogMode { None, Open, SaveAs, ImportObj, ExportObj, ChooseFileParm, SaveImage, SaveSequence, MergeScene, InstallAsset, ExportUsd };
+enum class FileDialogMode { None, Open, SaveAs, ImportObj, ExportObj, ChooseFileParm, SaveImage, SaveSequence, MergeScene, InstallAsset, ExportUsd, RunPython };
 
 class App {
 public:
@@ -143,6 +143,7 @@ public:
     // menus, preferences, clipboard (Menus.cpp)
     void drawDisplayOptions();
     void drawRenderSettings();
+    void drawPythonShell();
     void stepSequence();
     void loadPrefs();
     void savePrefs();
@@ -155,6 +156,10 @@ public:
     void openExample(const std::string& name);
     bool showSceneView = true, showNetwork = true, showParms = true, showSpreadsheet = true, showRenderView = true, showTimeline = true;
     bool showDisplayOptions = false, showRenderSettings = false;
+    bool showPythonShell = false;
+    // Runs Python against the scene (one undo step if it changed anything); output goes to the shell.
+    bool runPython(const std::string& code, const std::string& name, bool shell);
+    std::string pythonLog;
 
     bool playing = false;
     bool realtime = true;

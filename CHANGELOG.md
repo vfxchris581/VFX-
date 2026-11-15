@@ -5,6 +5,13 @@ what works, what is partial and what is planned.
 
 ## Unreleased
 
+Phase 11: Python scripting.
+
+- HD uses the Python 3.8+ installed on the computer (loaded at runtime through the stable ABI; nothing to install with HD). `hdc python --info` shows which.
+- `hd` module for nodes, parameters, expressions, keyframes, wiring, cooking, frames, files and geometry.
+- Python Shell pane, File → Run Python Script, `hdc python`, and a Python SOP node.
+- Example scripts in `examples/scripts`.
+
 Phase 10: rigid-body constraints and packed pieces.
 
 - RBD Solver constraint input: pin (ball joint), hinge (with motor) and spring constraints, breakable by force; pieces joined by a pin or hinge don't collide.

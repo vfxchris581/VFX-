@@ -148,7 +148,8 @@ bool Node::isTimeDependent() const {
                 return true;
         if (p.def->type == ParmType::Code &&
             (p.str.find("@Time") != std::string::npos || p.str.find("@Frame") != std::string::npos ||
-             p.str.find("$F") != std::string::npos || p.str.find("$T") != std::string::npos))
+             p.str.find("$F") != std::string::npos || p.str.find("$T") != std::string::npos ||
+             p.str.find("hd.frame()") != std::string::npos)) // Python SOP reading the frame
             return true;
     }
     return false;

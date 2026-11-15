@@ -17,6 +17,7 @@ void registerDestructionNodes(std::vector<NodeType>& types); // Destruction.cpp
 void registerFluidNodes(std::vector<NodeType>& types);       // Fluids.cpp
 void registerVellumNodes(std::vector<NodeType>& types);      // Vellum.cpp
 void registerWhitewaterNodes(std::vector<NodeType>& types);  // Whitewater.cpp
+namespace python { void registerNodes(std::vector<NodeType>& types); } // Python.cpp
 void registerShadingNodes(std::vector<NodeType>& types);     // Shading.cpp
 void registerRiggingNodes(std::vector<NodeType>& types);     // Rigging.cpp
 void registerCompositingNodes(std::vector<NodeType>& types); // Compositing.cpp
@@ -1073,6 +1074,7 @@ std::vector<NodeType> buildTypes() {
     registerFluidNodes(types);
     registerVellumNodes(types);
     registerWhitewaterNodes(types);
+    python::registerNodes(types);
     registerShadingNodes(types);
     registerRiggingNodes(types);
     registerCompositingNodes(types);

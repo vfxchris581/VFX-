@@ -36,6 +36,7 @@ add_library(hd_core STATIC
   src/core/Rigging.cpp
   src/core/Shading.cpp
   src/core/Usd.cpp
+  src/core/Python.cpp
   src/core/Version.cpp
   src/core/Sim.cpp
   src/core/Vellum.cpp
@@ -58,7 +59,7 @@ endif()
 set_source_files_properties(src/core/Version.cpp PROPERTIES COMPILE_DEFINITIONS
   "HD_VERSION_STRING=\"${PROJECT_VERSION}\";HD_GIT_REVISION=\"${HD_GIT_REVISION}\"")
 find_package(Threads REQUIRED)
-target_link_libraries(hd_core PUBLIC Threads::Threads)
+target_link_libraries(hd_core PUBLIC Threads::Threads ${CMAKE_DL_LIBS}) # dl: Python is loaded at runtime
 if(MSVC)
   target_compile_options(hd_core PRIVATE /W3 /utf-8)
   target_compile_definitions(hd_core PUBLIC _USE_MATH_DEFINES NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -149,6 +150,7 @@ if(HD_BUILD_APP)
     src/app/Menus.cpp
     src/app/Panels.cpp
     src/app/RenderView.cpp
+    src/app/PythonShell.cpp
     src/app/Shelf.cpp
     src/app/Theme.cpp
   )

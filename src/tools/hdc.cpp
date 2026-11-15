@@ -10,7 +10,10 @@
 #include <cstring>
 #include <functional>
 #include <chrono>
+#include <sstream>
+#include <fstream>
 #include "core/Version.h"
+#include "core/Python.h"
 #include <string>
 
 using namespace hd;
@@ -32,6 +35,9 @@ static void usage() {
         "  hdc bench  [--quick] [--examples DIR]          time standard simulation and render workloads\n"
         "  hdc demos                                     list demo scenes\n"
         "  hdc nodes                                     list node types\n"
+        "  hdc python <script.py | -c CODE> [scene.hdg] [--save out.hdg]\n"
+        "                                                run Python with the hd module (scene loaded first if given)\n"
+        "  hdc python --info                             show which Python HD uses\n"
         "  hdc --version                                 print version, commit and platform\n", versionString());
 }
 
@@ -180,6 +186,37 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (cmd == "--help" || cmd == "-h" || cmd == "help") { usage(); return 0; }
+    if (cmd == "python") {
+        if (argc >= 3 && std::string(argv[2]) == "--info") {
+            const python::Info& inf = python::ensure();
+            if (!inf.ok) { std::printf("Python unavailable: %s\n", inf.error.c_str()); return 1; }
+            std::printf("Python %s\n  interpreter: %s\n  library:     %s\n", inf.version.c_str(), inf.executable.c_str(), inf.library.c_str());
+            return 0;
+        }
+        std::string code, name, scene, saveTo;
+        int i = 2;
+        if (i < argc && std::string(argv[i]) == "-c" && i + 1 < argc) { code = argv[i + 1]; name = "<command>"; i += 2; }
+        else if (i < argc) {
+            std::ifstream f(argv[i], std::ios::binary);
+            if (!f) { std::printf("error: cannot read %s\n", argv[i]); return 1; }
+            std::stringstream ss; ss << f.rdbuf(); code = ss.str(); name = argv[i]; ++i;
+        } else { usage(); return 1; }
+        for (; i < argc; ++i) {
+            std::string a = argv[i];
+            if (a == "--save" && i + 1 < argc) saveTo = argv[++i];
+            else if (scene.empty()) scene = a;
+        }
+        Graph g;
+        std::string err;
+        if (!scene.empty() && !g.load(scene, &err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+        std::string out;
+        bool ok = python::run(g, code, out, name);
+        std::fputs(out.c_str(), stdout);
+        std::string log = python::takeLog();
+        if (!log.empty()) std::fputs(log.c_str(), stdout);
+        if (ok && !saveTo.empty() && !g.save(saveTo, &err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+        return ok ? 0 : 1;
+    }
     if (cmd == "nodes") {
         for (auto& t : nodeTypes())
             std::printf("%-15s %-18s %-11s %s\n", t.name.c_str(), t.label.c_str(), t.category.c_str(), t.description.c_str());

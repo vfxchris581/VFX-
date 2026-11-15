@@ -4,6 +4,7 @@
 // Writes a screenshot per example (PPM) so the UI can be inspected.
 //   hd_ui_smoke <examples_dir> <out_dir> [render_samples]
 #include "app/App.h"
+#include "core/Python.h"
 #include "core/Demo.h"
 #include "render/GL.h"
 #include <GLFW/glfw3.h>
@@ -158,6 +159,23 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 3; ++i) runFrame();
     save("about");
     app.showAbout = false;
+    // Python Shell: a command changes the scene as one undo step (skipped if no Python is installed)
+    app.showPythonShell = true;
+    for (int i = 0; i < 2; ++i) runFrame();
+    if (hd::python::available()) {
+        size_t n0 = app.graph.nodes().size();
+        bool ok = app.runPython("t = hd.createNode('torus', 'py_torus')\nt.parm('rad1').set(1.5)\nt.setDisplayFlag()\nprint('created', t)", "<shell>", true);
+        for (int i = 0; i < 3; ++i) runFrame();
+        save("python_shell");
+        if (!ok || app.graph.nodes().size() != n0 + 1 || !app.graph.findNode("py_torus") || app.pythonLog.find("created") == std::string::npos) {
+            std::printf("FAIL python shell command: %s\n", app.pythonLog.c_str()); ++failures;
+        }
+        app.undo();
+        runFrame();
+        if (app.graph.findNode("py_torus")) { std::printf("FAIL python command was not undone\n"); ++failures; }
+        std::printf("python shell ok (Python %s)\n", hd::python::ensure().version.c_str());
+    } else std::printf("python shell: Python not available (%s)\n", hd::python::ensure().error.c_str());
+    app.showPythonShell = false;
     app.graph.render.samples = renderSamples;
     app.graph.render.width = 480; app.graph.render.height = 270;
     app.startRender();

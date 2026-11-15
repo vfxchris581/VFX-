@@ -47,7 +47,15 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
+      # A real Python, so the Python tests run (and must pass) instead of skipping
+      - uses: actions/setup-python@v5
+        id: py
+        with:
+          python-version: "3.12"
       - name: Test
+        env:
+          HD_REQUIRE_PYTHON: "1"
+          HD_PYTHON: ${{ steps.py.outputs.python-path }}
         run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Read version
@@ -94,6 +102,7 @@ jobs:
           "$APP/Contents/MacOS/HD" --version | grep "HD $HD_VERSION"
           /tmp/hdmnt/hdc --version | grep "HD $HD_VERSION"
           /tmp/hdmnt/hdc info /tmp/hdmnt/examples/terrain.hdg | tail -1
+          HD_PYTHON="${{ steps.py.outputs.python-path }}" /tmp/hdmnt/hdc python /tmp/hdmnt/examples/scripts/ring_of_spheres.py | grep "12 packed"
           test -L /tmp/hdmnt/Applications
           hdiutil detach /tmp/hdmnt
           echo "Disk image OK"
@@ -144,6 +153,10 @@ jobs:
           if ($out -notmatch "HD $([regex]::Escape($env:HD_VERSION))") { throw 'hdc --version mismatch' }
           & "$dir\hdc.exe" info "$dir\examples\terrain.hdg" | Select-Object -Last 1
           if ($LASTEXITCODE -ne 0) { throw 'hdc info failed' }
+          $env:HD_PYTHON = "${{ steps.py.outputs.python-path }}"
+          $py = & "$dir\hdc.exe" python "$dir\examples\scripts\ring_of_spheres.py"
+          Write-Host $py
+          if ($LASTEXITCODE -ne 0 -or ($py -join "`n") -notmatch '12 packed') { throw 'hdc python failed' }
           # Uninstall in place (_?= makes the uninstaller run synchronously)
           $u = Start-Process -Wait -PassThru -FilePath "$dir\Uninstall.exe" -ArgumentList '/S', "_?=$dir"
           if ($u.ExitCode -ne 0) { throw "uninstaller exit code $($u.ExitCode)" }
@@ -176,6 +189,7 @@ jobs:
           "$t/prefix/bin/HD" --version | grep "HD $HD_VERSION"
           "$t/prefix/bin/hdc" --version | grep "HD $HD_VERSION"
           "$t/prefix/bin/hdc" info "$t/prefix/lib/hd/examples/terrain.hdg" | tail -1
+          HD_PYTHON="${{ steps.py.outputs.python-path }}" "$t/prefix/bin/hdc" python "$t/prefix/lib/hd/examples/scripts/ring_of_spheres.py" | grep "12 packed"
           grep -q "application/x-hd-scene" "$t/prefix/share/mime/globs2"
           "$t/prefix/lib/hd/uninstall.sh"
           test ! -e "$t/prefix/bin/hdc"
@@ -206,10 +220,12 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1
           UBSAN_OPTIONS: print_stacktrace=1
+          HD_NO_PYTHON: "1" # an embedded interpreter keeps its objects until exit, which LeakSanitizer reports
         run: ./build-asan/hd_tests
       - name: Fuzz every parser (3000 mutated inputs per target)
         env:
           ASAN_OPTIONS: detect_leaks=1
+          HD_NO_PYTHON: "1"
         run: |
           mkdir -p fuzzwork && cd fuzzwork
           ../build-asan/hd_fuzz 3000 ${{ github.run_number }}
