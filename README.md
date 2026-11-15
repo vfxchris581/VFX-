@@ -15,6 +15,7 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
   - Generators: Box, Sphere, Grid, Tube, Torus, Circle, Line, File (OBJ)
   - Modifiers: Transform, Merge, Subdivide (Catmull-Clark), PolyExtrude, Fuse, Facet, Reverse, Blast, PolyWire
   - Deformers: Mountain (fractal noise), Smooth, Peak, Point Jitter
+  - Scene: **Ground Plane** (a checker floor that is always shown in the viewport and renders, whichever node is displayed; Create shelf)
   - Points: Scatter (area weighted), Copy to Points (orients to `N`/`up`, scales by `pscale`/`scale`, transfers `Cd`, optional Pack and Instance), Pack, Unpack
   - Attributes: Attribute Wrangle, Attribute Create, Color, Normal, Material, UV Project
   - Utility: Null, Switch, Subnetwork, Subnet Input, Output, Time Shift

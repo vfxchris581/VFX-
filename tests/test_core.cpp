@@ -2891,6 +2891,53 @@ print("made", geo.numPoints())
     CHECK(ms < 5000);
 }
 
+TEST(ground_plane) {
+    Graph g;
+    Node* gp = g.createNode("groundplane");
+    gp->parm("size")->val[0] = 10; gp->parm("tile")->val[0] = 1;
+    g.cook(gp);
+    CHECK(gp->error().empty());
+    const Geometry& f = gp->geometry();
+    CHECK(f.numPrims() == 100 && f.numPoints() == 121);
+    // every square faces up and the colours alternate
+    bool up = true;
+    for (size_t i = 0; i < f.numPrims(); ++i) up = up && f.primNormal(int(i)).y > 0.99f;
+    CHECK(up);
+    const Attrib* cd = f.findAttrib(AttribClass::Prim, "Cd");
+    CHECK(cd && length(cd->getV(0) - cd->getV(1)) > 0.01f && length(cd->getV(0) - cd->getV(11)) < 1e-6f);
+    Vec3 mn, mx;
+    f.bounds(mn, mx);
+    CHECK(std::fabs(mn.x + 5) < 1e-5f && std::fabs(mx.z - 5) < 1e-5f && std::fabs(mn.y) < 1e-6f && std::fabs(mx.y) < 1e-6f);
+    // it is shown with whatever is displayed...
+    Node* box = g.createNode("box");
+    g.setDisplayNode(box);
+    g.cook(box);
+    Geometry scene;
+    CHECK(sceneGeometry(g, box, false, scene) == 1);
+    // as a packed prim: the box keeps its own attributes, the floor its own
+    CHECK(scene.numPrims() == box->geometry().numPrims() && scene.numPacked() == 1 && scene.packed[0].geo->numPrims() == 100);
+    CHECK(scene.findAttrib(AttribClass::Prim, "Cd") == nullptr);
+    // ...and with nothing displayed
+    CHECK(sceneGeometry(g, nullptr, false, scene) == 1 && scene.numPacked() == 1);
+    // not twice when it is already wired into the displayed result
+    Node* m = g.createNode("merge");
+    g.connect(box, m, 0);
+    g.connect(gp, m, 1);
+    g.cook(m);
+    CHECK(sceneGeometry(g, m, false, scene) == 0 && scene.numPrims() == box->geometry().numPrims() + 100);
+    // bypass hides it; "Show in Renders" off keeps it a viewport-only guide
+    gp->bypass = true;
+    CHECK(sceneGeometry(g, box, false, scene) == 0);
+    gp->bypass = false;
+    gp->parm("render")->val[0] = 0; gp->touch();
+    CHECK(sceneGeometry(g, box, false, scene) == 1);
+    CHECK(sceneGeometry(g, box, true, scene) == 0);
+    // big floors stay bounded: at most 400 x 400 squares
+    gp->parm("size")->val[0] = 1000; gp->parm("tile")->val[0] = 0.01f; gp->touch();
+    g.cook(gp);
+    CHECK(gp->geometry().numPrims() == 160000u);
+}
+
 int main() {
     for (auto& t : tests()) {
         int before = g_failed;

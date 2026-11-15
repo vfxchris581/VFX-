@@ -44,9 +44,12 @@ struct ViewOptions {
     int gridPlane = 0;          // 0 = XZ, 1 = XY, 2 = YZ
     Vec3 gridOrigin{0, 0, 0};
     float gridSpacing = 1.f;
-    int gridCells = 20;         // lines across
+    int gridCells = 20;         // lines across (when not infinite)
     int gridRuler = 5;          // brighter line every N cells
-    float gridOpacity = 0.55f;
+    float gridOpacity = 0.8f;
+    bool gridInfinite = true;   // Houdini-style endless plane that fades toward the horizon
+    int gridRulerType = 0;      // 0 = no ruler, 1 = numbers on the main axes
+    float pixelScale = 1.f;     // framebuffer pixels per UI point (2 on Retina), set by the app
     // background gradient
     Vec3 bgTop{0.40f, 0.43f, 0.48f};
     Vec3 bgBottom{0.13f, 0.135f, 0.15f};
@@ -125,11 +128,11 @@ private:
         textureErrors_.push_back(msg);
     }
     unsigned progMat_ = 0;
+    unsigned progGrid_ = 0;
+    void drawGrid(const Camera& cam, const Mat4& V, const Mat4& P, const ViewOptions& opt);
     void upload(Batch& b, const std::vector<float>& data, int floatsPerVertex, const int* layout, int nAttribs);
     void ensureTargets(int w, int h);
     void drawBatch(const Batch& b, unsigned mode);
-    void rebuildGrid(const ViewOptions& opt);
-    float gridKey_[8] = {-1, 0, 0, 0, 0, 0, 0, 0};
     void drawVolumes(int w, int h, const Camera& cam);
     struct GpuVolume {
         unsigned tex = 0;

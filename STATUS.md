@@ -180,3 +180,10 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Examples | `examples/scripts`: a ring of packed spheres built in Python, a scene report, a simulation wedge |
 | Limits | Not done: Python-defined node types, shelf tools and callbacks on parameter changes; packed-prim and volume contents aren't exposed to Python; `import hd` from a separate Python process isn't supported (scripts run inside HD or hdc); the sanitizer CI job runs without Python (an embedded interpreter keeps objects until exit) |
 
+## Modelling aids
+
+| Item | Status |
+|---|---|
+| Reference plane | Working: Houdini-style endless XZ grid (or XY / YZ), drawn per pixel so lines stay crisp at a constant width on Retina screens, brighter every "Ruler Every" cells, red X and blue Z axes, finer lines fading out as you zoom out and the whole grid fading toward the horizon. Display Options > Grid: plane, origin, spacing, infinite or a fixed size, opacity, and Ruler Type (numbers along the main axes). Older saved preferences are reset to the new defaults once |
+| Ground Plane node | Working: a checker floor (size, height, tile size, two colours, roughness) that is always shown in the viewport and rendered, whichever node has the display flag, like lights. Added as a packed prim so it keeps its own colours. Not drawn twice if wired into the displayed result; Bypass hides it; "Show in Renders" off makes it a viewport-only guide; replaces the renderer's built-in ground. Create shelf > Ground Plane (sized to the scene, keeps the display flag where it is). Tested in the core tests and the app smoke test |
+

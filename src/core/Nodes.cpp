@@ -158,6 +158,53 @@ std::vector<NodeType> buildTypes() {
         add(t);
     }
     {
+        // A scene-level floor: like lights and cameras, every Ground Plane in the top-level network is
+        // shown in the viewport and rendered, whichever node has the display flag.
+        NodeType t; t.name = "groundplane"; t.label = "Ground Plane"; t.category = "Generators";
+        t.description = "A floor that is always shown in the viewport and in renders, whatever node is displayed. Bypass hides it.";
+        t.minInputs = 0; t.maxInputs = 0;
+        t.parms = {F("size", "Size", 40, 1, 1000, "Width and depth of the floor"),
+                   F("height", "Height", 0, -100, 100, "Y position of the floor"),
+                   F("tile", "Tile Size", 1, 0.01f, 100, "Size of each checker square"),
+                   T("checker", "Checker", true, "Alternate the two colours (otherwise Color 1 everywhere)"),
+                   V("color1", "Color 1", Vec3(0.40f, 0.41f, 0.43f), 0, 1),
+                   V("color2", "Color 2", Vec3(0.33f, 0.34f, 0.36f), 0, 1),
+                   F("rough", "Roughness", 0.85f, 0, 1),
+                   T("render", "Show in Renders", true, "Off: only a modelling guide in the viewport")};
+        for (auto& p : t.parms) if (p.name == "color1" || p.name == "color2") p.help = "color";
+        t.cook = [](CookContext& c) {
+            const float size = std::max(0.01f, c.f("size"));
+            const float tile = std::max(1e-3f, c.f("tile"));
+            const int n = std::clamp(int(std::ceil(size / tile)), 1, 400); // squares per side
+            const float h = c.f("height"), half = size * 0.5f, step = size / float(n);
+            Geometry& g = c.out;
+            for (int j = 0; j <= n; ++j)
+                for (int i = 0; i <= n; ++i) g.addPoint(Vec3(-half + float(i) * step, h, -half + float(j) * step));
+            Attrib& N = g.addAttrib(AttribClass::Point, "N", 3);
+            N.resize(g.numPoints());
+            for (size_t i = 0; i < g.numPoints(); ++i) N.setV(i, Vec3(0, 1, 0));
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    int a = j * (n + 1) + i;
+                    g.addPrim({a, a + n + 1, a + n + 2, a + 1}); // counter-clockwise from above: faces up
+                }
+            Attrib& cd = g.addAttrib(AttribClass::Prim, "Cd", 3);
+            Attrib& rough = g.addAttrib(AttribClass::Prim, "rough", 1);
+            Attrib& tag = g.addAttrib(AttribClass::Prim, "groundplane", 1, Vec3(1));
+            cd.resize(g.numPrims()); rough.resize(g.numPrims()); tag.resize(g.numPrims());
+            const Vec3 c1 = c.v("color1"), c2 = c.v("color2");
+            const bool checker = c.b("checker");
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    size_t k = size_t(j * n + i);
+                    cd.setV(k, checker && ((i + j) & 1) ? c2 : c1);
+                    rough.setF(k, c.f("rough"));
+                    tag.setF(k, 1);
+                }
+        };
+        add(t);
+    }
+    {
         NodeType t; t.name = "grid"; t.label = "Grid"; t.category = "Generators";
         t.description = "Creates a planar grid of quads.";
         t.parms = {M("orient", "Orientation", {"ZX Plane", "XY Plane", "YZ Plane"}), F("sizex", "Size X", 10, 0, 50), F("sizey", "Size Y", 10, 0, 50),

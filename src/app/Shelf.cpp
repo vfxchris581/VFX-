@@ -150,7 +150,7 @@ void App::updateGuides() {
 
 // ---------------------------------------------------------------- shelf tools
 void App::shelfTool(const std::string& tool) {
-    const bool sceneLevel = tool == "camera" || tool == "skylight" || tool == "ambientlight" || isLightType(tool);
+    const bool sceneLevel = tool == "camera" || tool == "skylight" || tool == "ambientlight" || tool == "groundplane" || isLightType(tool);
     checkpoint();
     if (sceneLevel) {
         // lights and cameras belong to the scene, so they always go in the top-level network
@@ -205,6 +205,14 @@ void App::shelfTool(const std::string& tool) {
             made = make("distantlight");
             setV(made, "t", ctr + Vec3(0, 1.9f, 0) * R);
             setV(made, "r", Vec3(-50, 40, 0));
+        } else if (tool == "groundplane") {
+            // one floor under the scene, big enough to reach well past it; the display flag stays put
+            for (auto& n : graph.nodes())
+                if (n->type().name == "groundplane") { select(n.get()); status("This scene already has " + n->name() + " (Bypass hides it)."); return; }
+            made = make("groundplane");
+            const float size = std::max(40.f, std::ceil(R * 8.f / 10.f) * 10.f);
+            made->parm("size")->val[0] = size;
+            made->parm("tile")->val[0] = size > 80 ? std::pow(10.f, std::floor(std::log10(size / 40.f))) : 1.f;
         } else if (tool == "envlight" || tool == "ambientlight") {
             made = make("envlight");
             setV(made, "t", ctr + Vec3(-1.2f, 1.6f, 0) * R);
@@ -212,8 +220,9 @@ void App::shelfTool(const std::string& tool) {
         }
         if (made) {
             select(made);
-            status(tool == "camera" ? "Created " + made->name() + " from the current view. Turn on Lock to move it with the view."
-                                    : "Created " + made->name() + ". Lights replace the default sun and sky in the Render View.");
+            status(tool == "camera"        ? "Created " + made->name() + " from the current view. Turn on Lock to move it with the view."
+                   : tool == "groundplane" ? "Created " + made->name() + ": always shown under the scene, in the viewport and renders. Bypass hides it."
+                                           : "Created " + made->name() + ". Lights replace the default sun and sky in the Render View.");
         }
         return;
     }
@@ -239,7 +248,7 @@ void App::drawShelf() {
     ImGui::PopStyleVar();
     if (!open) { ImGui::End(); return; }
     static const Tool create[] = {{"Box", "box", "Box"}, {"Sphere", "sphere", "Sphere"}, {"Tube", "tube", "Tube or cone"}, {"Torus", "torus", "Torus"},
-                                  {"Grid", "grid", "Flat grid (a floor)"}, {"Line", "line", "Line"}, {"Circle", "circle", "Circle"}, {"File", "file", "Load an .obj file"}};
+                                  {"Grid", "grid", "Flat grid"}, {"Ground Plane", "groundplane", "A floor that is always shown, in the viewport and renders,\nwhichever node is displayed"}, {"Line", "line", "Line"}, {"Circle", "circle", "Circle"}, {"File", "file", "Load an .obj file"}};
     static const Tool modify[] = {{"Transform", "xform", "Move, rotate, scale"}, {"Subdivide", "subdivide", "Smooth by subdividing"}, {"PolyExtrude", "polyextrude", "Extrude faces"},
                                   {"Mountain", "mountain", "Noise displacement"}, {"Smooth", "smooth", "Relax points"}, {"Scatter", "scatter", "Scatter points on a surface"},
                                   {"Copy to Points", "copytopoints", "Copy geometry onto points"}, {"Color", "color", "Set color"}, {"Material", "material", "Roughness, metallic, glow"},

@@ -23,7 +23,10 @@ void App::startRender() {
         rs.sensorHeight = cam.aperture * float(cam.resy) / float(cam.resx);
         if (cam.dof) { rs.dof = true; rs.fstop = cam.fstop; rs.focusDist = cam.focus; }
     }
-    tracer_.start(d->geometry(), rs, collectLights(graph, graph.frame));
+    Geometry scene;
+    if (sceneGeometry(graph, &net() == &graph ? d : nullptr, true, scene) > 0) rs.ground = false; // the Ground Plane replaces the built-in ground
+    if (&net() != &graph) { scene.merge(d->geometry()); } // display inside a subnet: sceneGeometry got only the planes
+    tracer_.start(scene, rs, collectLights(graph, graph.frame));
     std::string warn = tracer_.warnings();
     if (!warn.empty()) status("Render: " + warn.substr(0, warn.find('\n')), true);
 }

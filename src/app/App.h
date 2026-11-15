@@ -197,6 +197,7 @@ private:
     std::string lastTitle_;
     float viewportW_ = 0, viewportH_ = 0;
     bool frameOnNextCook_ = true;
+    uint64_t groundStamp_ = 0; // what the viewport last got when Ground Plane nodes were added
 
     // render view
     PathTracer tracer_;

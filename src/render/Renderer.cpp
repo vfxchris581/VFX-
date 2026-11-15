@@ -238,6 +238,56 @@ void main() {
     frag = vec4(pow(aces(c), vec3(1.0 / 2.2)), 1.0);
 })";
 
+// Reference plane: a large quad on the grid plane; the lines are computed per pixel (anti-aliased
+// with screen-space derivatives, a constant width in points, finer lines fading out as they get
+// dense, everything fading toward the horizon), like Houdini's endless reference grid.
+const char* kGridVS = R"(#version 330 core
+layout(location=0) in vec3 aPos;
+uniform mat4 uView, uProj;
+out vec3 vW;
+void main() {
+    vW = aPos;
+    gl_Position = uProj * uView * vec4(aPos, 1.0);
+})";
+
+const char* kGridFS = R"(#version 330 core
+in vec3 vW;
+uniform vec3 uOrigin, uAxisU, uAxisV, uEye, uColU, uColV;
+uniform float uSpacing, uRuler, uOpacity, uPx, uFadeNear, uFadeFar, uExtent;
+out vec4 frag;
+// coverage of lines at integer values of c (c in cells), width in framebuffer pixels
+float lines(vec2 c, float widthPx) {
+    vec2 d = max(fwidth(c), vec2(1e-7));
+    vec2 g = abs(fract(c - 0.5) - 0.5) / d;
+    return clamp(widthPx * 0.5 + 0.5 - min(g.x, g.y), 0.0, 1.0);
+}
+float axis(float x, float widthPx) {
+    return clamp(widthPx * 0.5 + 0.5 - abs(x) / max(fwidth(x), 1e-7), 0.0, 1.0);
+}
+void main() {
+    vec3 r = vW - uOrigin;
+    vec2 p = vec2(dot(r, uAxisU), dot(r, uAxisV));
+    if (uExtent > 0.0 && (abs(p.x) > uExtent * 1.0001 || abs(p.y) > uExtent * 1.0001)) discard;
+    vec2 c1 = p / uSpacing;
+    float cellPx = 1.0 / max(max(fwidth(c1.x), fwidth(c1.y)), 1e-7); // framebuffer pixels per cell
+    float w = uPx;
+    float minor = lines(c1, w) * smoothstep(4.0 * uPx, 14.0 * uPx, cellPx);
+    vec2 c2 = c1 / uRuler;
+    float major = lines(c2, w * 1.3) * smoothstep(4.0 * uPx, 14.0 * uPx, cellPx * uRuler);
+    float far = lines(c2 / uRuler, w * 1.3);
+    float a = max(minor * 0.42, max(major * 0.85, far * 0.85));
+    vec3 col = vec3(0.68, 0.70, 0.74);
+    float au = axis(p.y, w * 1.6); // the U axis: where v = 0
+    float av = axis(p.x, w * 1.6);
+    col = mix(col, uColU, au);
+    a = max(a, au);
+    col = mix(col, uColV, av * (1.0 - au * 0.5));
+    a = max(a, av);
+    a *= 1.0 - smoothstep(uFadeNear, uFadeFar, length(vW - uEye));
+    if (a * uOpacity < 0.004) discard;
+    frag = vec4(col, a * uOpacity);
+})";
+
 const char* kLineVS = R"(#version 330 core
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aCol;
@@ -419,7 +469,8 @@ bool Renderer::init(std::string& error) {
     progBg_ = progPoint_ ? linkProgram(kBgVS, kBgFS, error) : 0;
     progVol_ = progBg_ ? linkProgram(kVolVS, kVolFS, error) : 0;
     progMat_ = progVol_ ? linkProgram(kMatVS, kMatFS, error) : 0;
-    if (!progMat_) return false;
+    progGrid_ = progMat_ ? linkProgram(kGridVS, kGridFS, error) : 0;
+    if (!progGrid_) return false;
     {
         // unit cube, outward-facing triangles
         static const float q[6][4][3] = {
@@ -440,35 +491,6 @@ bool Renderer::init(std::string& error) {
 
     inited_ = true;
     return true;
-}
-
-void Renderer::rebuildGrid(const ViewOptions& opt) {
-    const float key[8] = {float(opt.gridPlane), opt.gridOrigin.x, opt.gridOrigin.y, opt.gridOrigin.z, opt.gridSpacing, float(opt.gridCells), float(opt.gridRuler), 1.f};
-    bool same = true;
-    for (int i = 0; i < 8; ++i) same &= key[i] == gridKey_[i];
-    if (same) return;
-    for (int i = 0; i < 8; ++i) gridKey_[i] = key[i];
-    // axes spanning the plane; axis lines take the usual X = red, Y = green, Z = blue
-    const int u = opt.gridPlane == 2 ? 1 : 0, v = opt.gridPlane == 1 ? 1 : 2;
-    const Vec3 axisCol[3] = {Vec3(0.85f, 0.25f, 0.25f), Vec3(0.35f, 0.8f, 0.3f), Vec3(0.3f, 0.45f, 0.95f)};
-    const int half = std::clamp(opt.gridCells, 2, 400) / 2;
-    const float sp = std::max(opt.gridSpacing, 1e-4f), ext = float(half) * sp;
-    const int ruler = std::max(1, opt.gridRuler);
-    std::vector<float> g;
-    for (int i = -half; i <= half; ++i) {
-        Vec3 c = (i % ruler == 0) ? Vec3(0.55f) : Vec3(0.38f);
-        float pos = float(i) * sp;
-        Vec3 a(0), b(0), c0(0), d(0);
-        a[u] = -ext; a[v] = pos; b[u] = ext; b[v] = pos;   // parallel to u
-        c0[v] = -ext; c0[u] = pos; d[v] = ext; d[u] = pos; // parallel to v
-        Vec3 cu = i == 0 ? axisCol[u] : c, cv = i == 0 ? axisCol[v] : c;
-        push3(g, a + opt.gridOrigin); push3(g, cu);
-        push3(g, b + opt.gridOrigin); push3(g, cu);
-        push3(g, c0 + opt.gridOrigin); push3(g, cv);
-        push3(g, d + opt.gridOrigin); push3(g, cv);
-    }
-    const int lineLayout[2] = {3, 3};
-    upload(grid_, g, 6, lineLayout, 2);
 }
 
 void Renderer::shutdown() {
@@ -495,6 +517,8 @@ void Renderer::shutdown() {
     protos_.clear();
     if (progMat_) glDeleteProgram(progMat_);
     progMat_ = 0;
+    if (progGrid_) glDeleteProgram(progGrid_);
+    progGrid_ = 0;
     for (Batch* b : {&tris_, &wire_, &curves_, &points_, &loose_, &normals_, &grid_, &cube_, &guides_}) {
         if (b->vbo) glDeleteBuffers(1, &b->vbo);
         if (b->vao) glDeleteVertexArrays(1, &b->vao);
@@ -1030,6 +1054,52 @@ void Renderer::drawMaterials(const Mat4& V, const Mat4& P, const ViewOptions& op
     for (int m = 3; m >= 0; --m) { glActiveTexture(GL_TEXTURE0 + unsigned(m)); glBindTexture(GL_TEXTURE_2D_ARRAY, 0); }
 }
 
+void Renderer::drawGrid(const Camera& cam, const Mat4& V, const Mat4& P, const ViewOptions& opt) {
+    const int u = opt.gridPlane == 2 ? 1 : 0, v = opt.gridPlane == 1 ? 1 : 2, nAxis = 3 - u - v;
+    Vec3 U(0), Vv(0), N(0);
+    U[u] = 1; Vv[v] = 1; N[nAxis] = 1;
+    const float sp = std::max(opt.gridSpacing, 1e-4f);
+    const Vec3 eye = cam.eye();
+    // the visible area: around the eye's foot on the plane, out to where the grid has faded
+    const float height = std::fabs(dot(eye - opt.gridOrigin, N));
+    const float fadeFar = std::max({cam.dist * 14.f, height * 30.f, sp * 30.f});
+    float ext;
+    Vec3 c = opt.gridOrigin;
+    if (opt.gridInfinite) {
+        ext = fadeFar * 1.05f;
+        Vec3 foot = eye - N * dot(eye - opt.gridOrigin, N);
+        c = foot;
+    } else {
+        ext = float(std::clamp(opt.gridCells, 2, 400) / 2) * sp;
+    }
+    std::vector<float> quad;
+    const Vec3 corners[6] = {c - U * ext - Vv * ext, c + U * ext - Vv * ext, c + U * ext + Vv * ext,
+                             c - U * ext - Vv * ext, c + U * ext + Vv * ext, c - U * ext + Vv * ext};
+    for (const Vec3& q : corners) push3(quad, q);
+    const int layout[1] = {3};
+    upload(grid_, quad, 3, layout, 1);
+    const Vec3 axisCol[3] = {Vec3(0.92f, 0.28f, 0.26f), Vec3(0.40f, 0.85f, 0.35f), Vec3(0.32f, 0.50f, 1.0f)};
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glUseProgram(progGrid_);
+    setMat(progGrid_, "uView", V);
+    setMat(progGrid_, "uProj", P);
+    auto u3 = [&](const char* n, const Vec3& x) { glUniform3f(glGetUniformLocation(progGrid_, n), x.x, x.y, x.z); };
+    auto u1 = [&](const char* n, float x) { glUniform1f(glGetUniformLocation(progGrid_, n), x); };
+    u3("uOrigin", opt.gridOrigin); u3("uAxisU", U); u3("uAxisV", Vv); u3("uEye", eye);
+    u3("uColU", axisCol[u]); u3("uColV", axisCol[v]);
+    u1("uSpacing", sp); u1("uRuler", float(std::max(2, opt.gridRuler)));
+    u1("uOpacity", std::clamp(opt.gridOpacity, 0.f, 1.f));
+    u1("uPx", std::max(1.f, opt.pixelScale));
+    u1("uFadeNear", opt.gridInfinite ? fadeFar * 0.3f : 1e9f);
+    u1("uFadeFar", opt.gridInfinite ? fadeFar : 2e9f);
+    u1("uExtent", opt.gridInfinite ? 0.f : ext);
+    drawBatch(grid_, GL_TRIANGLES);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
 void Renderer::drawInstanced(const Batch& b, int instances) {
     if (!b.vao || !b.count || instances <= 0) return;
     glBindVertexArray(b.vao);
@@ -1079,22 +1149,8 @@ unsigned Renderer::render(int w, int h, const Camera& cam, const ViewOptions& op
 
     Mat4 V = cam.view(), P = cam.proj(float(w) / float(h));
 
-    // grid (alpha blended, no depth write)
-    if (opt.grid) {
-        rebuildGrid(opt);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
-        glUseProgram(progLine_);
-        setMat(progLine_, "uView", V);
-        setMat(progLine_, "uProj", P);
-        glUniform1f(glGetUniformLocation(progLine_, "uDepthBias"), 0.f);
-        glUniform4f(glGetUniformLocation(progLine_, "uOverride"), 0, 0, 0, 0);
-        glUniform1f(glGetUniformLocation(progLine_, "uAlpha"), std::clamp(opt.gridOpacity, 0.f, 1.f));
-        drawBatch(grid_, GL_LINES);
-        glDepthMask(GL_TRUE);
-        glDisable(GL_BLEND);
-    }
+    // reference plane (alpha blended, no depth write: geometry always draws over it)
+    if (opt.grid) drawGrid(cam, V, P, opt);
 
     // shaded surfaces
     if (opt.shaded) {

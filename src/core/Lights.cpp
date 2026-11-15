@@ -1,5 +1,7 @@
 #include "Lights.h"
+#include <algorithm>
 #include "Node.h"
+#include "Geometry.h"
 
 namespace hd {
 namespace {
@@ -69,6 +71,45 @@ Vec3 aimRotation(const Vec3& from, const Vec3& target) {
     Vec3 f = normalize(target - from);
     if (length(f) < 0.5f) return Vec3(0);
     return Vec3(std::asin(std::clamp(f.y, -1.f, 1.f)) * 180.f / kPi, std::atan2(-f.x, -f.z) * 180.f / kPi, 0);
+}
+
+std::vector<Node*> groundPlanes(Graph& g, const Node* display, bool forRender) {
+    std::vector<Node*> out;
+    // everything the display node already includes
+    std::vector<const Node*> upstream, stack;
+    if (display) stack.push_back(display);
+    while (!stack.empty()) {
+        const Node* n = stack.back();
+        stack.pop_back();
+        if (std::find(upstream.begin(), upstream.end(), n) != upstream.end()) continue;
+        upstream.push_back(n);
+        for (const Node* in : n->inputs) if (in) stack.push_back(in);
+    }
+    for (auto& up : g.nodes()) {
+        Node* n = up.get();
+        if (n->type().name != "groundplane" || n->bypass) continue;
+        if (std::find(upstream.begin(), upstream.end(), n) != upstream.end()) continue;
+        if (forRender) {
+            const Parm* r = n->parm("render");
+            if (r && n->evalFloat(*r, 0, g.frame, g.fps) < 0.5f) continue;
+        }
+        g.cook(n);
+        if (n->error().empty()) out.push_back(n);
+    }
+    return out;
+}
+
+int sceneGeometry(Graph& g, Node* display, bool forRender, Geometry& out) {
+    out = display ? display->geometry() : Geometry();
+    std::vector<Node*> planes = groundPlanes(g, display, forRender);
+    // added as packed prims, so the floor keeps its own colours and material whatever attributes
+    // the displayed geometry has (merging would mix point and prim Cd)
+    for (Node* gp : planes) {
+        PackedPrim pk;
+        pk.geo = std::make_shared<const Geometry>(gp->geometry());
+        out.packed.push_back(pk);
+    }
+    return int(planes.size());
 }
 
 std::vector<Light> collectLights(const Graph& g, float frame) {

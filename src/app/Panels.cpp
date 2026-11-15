@@ -38,7 +38,7 @@ void App::drawViewport() {
     ImGui::SameLine(); toggleButton("#Pt", &showPointNumbers, "Point numbers");
     ImGui::SameLine(); toggleButton("#Prim", &showPrimNumbers, "Primitive numbers");
     ImGui::SameLine(); toggleButton("N", &viewOpts.normals, "Point normals");
-    ImGui::SameLine(); toggleButton("Grid", &viewOpts.grid, "Ground grid");
+    ImGui::SameLine(); toggleButton("Grid", &viewOpts.grid, "Reference plane: the endless ground grid (X axis red, Z axis blue).\nSpacing, plane, ruler numbers: Display Options (D) > Grid");
     ImGui::SameLine(); toggleButton("Backface", &viewOpts.backfaceTint, "Tint back-facing polygons blue");
     ImGui::SameLine(); ImGui::TextDisabled("|");
     ImGui::SameLine(); if (ImGui::SmallButton("Frame")) frameGeometry();
@@ -72,6 +72,7 @@ void App::drawViewport() {
     if (avail.x < 8 || avail.y < 8) { ImGui::End(); return; }
     updateSceneCamera(false, avail.x / avail.y);
     ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+    viewOpts.pixelScale = scale.y > 0 ? scale.y : 1.f; // grid lines keep their width on Retina screens
     int w = int(avail.x * scale.x), h = int(avail.y * scale.y);
     viewportW_ = avail.x; viewportH_ = avail.y;
     unsigned tex = renderer.render(w, h, camera, viewOpts);
@@ -80,6 +81,59 @@ void App::drawViewport() {
     bool hovered = ImGui::IsItemHovered();
     ImGuiIO& io = ImGui::GetIO();
 
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        // reference plane ruler (Houdini's "Ruler on main axis"): numbers along the two grid axes
+    if (viewOpts.grid && viewOpts.gridRulerType == 1) {
+        Mat4 VP = camera.proj(avail.x / avail.y) * camera.view();
+        auto proj = [&](const Vec3& p, ImVec2& out) {
+            float x = VP.at(0, 0) * p.x + VP.at(0, 1) * p.y + VP.at(0, 2) * p.z + VP.at(0, 3);
+            float y = VP.at(1, 0) * p.x + VP.at(1, 1) * p.y + VP.at(1, 2) * p.z + VP.at(1, 3);
+            float ww = VP.at(3, 0) * p.x + VP.at(3, 1) * p.y + VP.at(3, 2) * p.z + VP.at(3, 3);
+            if (ww <= 1e-4f) return false;
+            out = ImVec2(imgPos.x + (x / ww * 0.5f + 0.5f) * avail.x, imgPos.y + (1 - (y / ww * 0.5f + 0.5f)) * avail.y);
+            return out.x > imgPos.x && out.y > imgPos.y && out.x < imgPos.x + avail.x && out.y < imgPos.y + avail.y;
+        };
+        const int pu = viewOpts.gridPlane == 2 ? 1 : 0, pv = viewOpts.gridPlane == 1 ? 1 : 2;
+        Vec3 U(0), Vv(0);
+        U[pu] = 1; Vv[pv] = 1;
+        // label step: ruler x spacing, doubled until labels are at least ~70 points apart near the view centre
+        float step = std::max(viewOpts.gridSpacing, 1e-4f) * float(std::max(1, viewOpts.gridRuler));
+        Vec3 o = viewOpts.gridOrigin;
+        ImVec2 s0, s1;
+        for (int it = 0; it < 30; ++it) {
+            if (proj(o, s0) && proj(o + U * step, s1) && std::hypot(s1.x - s0.x, s1.y - s0.y) >= 70) break;
+            step *= 2;
+        }
+        dl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
+        char num[32];
+        const ImU32 colU = pu == 0 ? IM_COL32(240, 120, 110, 230) : IM_COL32(130, 220, 120, 230);
+        const ImU32 colV = pv == 2 ? IM_COL32(130, 160, 255, 230) : IM_COL32(130, 220, 120, 230);
+        // outward from the origin on each axis; skip labels that would crowd the previous one
+        // (where an axis recedes toward the horizon) and stop where the grid has faded
+        const Vec3 eye = camera.eye();
+        const float limit = std::max(camera.dist * 14.f, std::max(viewOpts.gridSpacing, 1e-4f) * 30.f) * 0.55f;
+        for (int axisI = 0; axisI < 2; ++axisI) {
+            const Vec3 dir = axisI == 0 ? U : Vv;
+            const ImU32 col = axisI == 0 ? colU : colV;
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                ImVec2 last(-1e9f, -1e9f);
+                for (int k = 1; k <= 400; ++k) {
+                    float val = float(sgn * k) * step;
+                    Vec3 wp = o + dir * val;
+                    if (length(wp - eye) > limit) break;
+                    ImVec2 sp;
+                    if (!proj(wp, sp)) continue;
+                    if (std::hypot(sp.x - last.x, sp.y - last.y) < 48) continue;
+                    std::snprintf(num, sizeof num, "%g", double(val));
+                    dl->AddText(ImVec2(sp.x + 3, sp.y + 1), col, num);
+                    last = sp;
+                }
+            }
+        }
+        dl->PopClipRect();
+    }
+    }
     // camera navigation (Houdini: LMB tumble, MMB pan, RMB dolly; Alt also works)
     bool navigated = false;
     if (hovered && g_vpDrag == 0) {

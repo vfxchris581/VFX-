@@ -283,7 +283,9 @@ int main(int argc, char** argv) {
                 r.sensorHeight = cam.aperture * float(r.height) / float(r.width);
                 if (cam.dof) { r.dof = true; r.fstop = cam.fstop; r.focusDist = cam.focus; }
             }
-            pt.start(target->geometry(), r, collectLights(g, g.frame));
+            Geometry scene;
+            if (sceneGeometry(g, target, true, scene) > 0) r.ground = false; // Ground Plane nodes replace the built-in ground
+            pt.start(scene, r, collectLights(g, g.frame));
             pt.wait();
             std::vector<uint8_t> img; int w = 0, h = 0; uint64_t ver = 0;
             pt.fetch(img, w, h, ver);

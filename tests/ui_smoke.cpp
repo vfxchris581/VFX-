@@ -155,6 +155,33 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 3; ++i) runFrame();
     save("render_settings");
     app.showRenderSettings = false;
+    // Ground Plane from the shelf on the terrain example: always shown, display flag untouched
+    {
+        app.loadScene(exDir + "/terrain.hdg");
+        for (int i = 0; i < 3; ++i) runFrame();
+        hd::Node* before = app.graph.displayNode();
+        app.shelfTool("groundplane");
+        for (int i = 0; i < 4; ++i) runFrame();
+        hd::Node* gp = nullptr;
+        for (auto& n : app.graph.nodes()) if (n->type().name == "groundplane") gp = n.get();
+        if (!gp || app.graph.displayNode() != before || !gp->error().empty()) { std::printf("FAIL ground plane tool\n"); ++failures; }
+        if (app.renderer.stats().triangles < before->geometry().numPrims() + 1000) { std::printf("FAIL ground plane not drawn\n"); ++failures; }
+        save("ground_plane");
+    }
+    // an empty scene: what you see when you start modelling (the reference grid on its own)
+    app.newScene(false);
+    for (int i = 0; i < 4; ++i) runFrame();
+    save("empty_scene");
+    // zoomed out a long way and with the ruler: lines thin out instead of turning into noise
+    app.viewOpts.gridRulerType = 1;
+    app.camera.dist = 120;
+    for (int i = 0; i < 3; ++i) runFrame();
+    save("grid_far_ruler");
+    app.camera.dist = 2; app.camera.pitch = 60;
+    for (int i = 0; i < 3; ++i) runFrame();
+    save("grid_close");
+    app.viewOpts.gridRulerType = 0;
+    app.camera.home();
     app.showAbout = true;
     for (int i = 0; i < 3; ++i) runFrame();
     save("about");

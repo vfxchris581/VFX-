@@ -3,6 +3,11 @@
 Version numbers follow the build phases. Each release lists what changed; STATUS.md lists
 what works, what is partial and what is planned.
 
+## Unreleased
+
+- Ground Plane node: a checker floor that is always shown in the viewport and renders, whichever node is displayed (Create shelf).
+- Reference grid redone like Houdini's: endless, crisp on Retina screens, fading with distance and zoom, optional ruler numbers on the axes.
+
 ## 0.7.0
 
 Phases 8 to 11: installers and releases, packed primitives and instancing, rigid-body constraints, Python scripting, plus new simulation and viewport features.

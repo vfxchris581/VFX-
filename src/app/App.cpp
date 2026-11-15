@@ -3,6 +3,7 @@
 #include "core/Demo.h"
 #include "core/GeoIO.h"
 #include "core/Version.h"
+#include "core/Lights.h"
 #include <sstream>
 #include <fstream>
 #include "core/Python.h"
@@ -208,7 +209,9 @@ Node* App::createNode(const std::string& type, float x, float y, int connectFrom
         if (!n->inputs.empty()) net().connect(src, n, 0);
     // Houdini behaviour: new nodes become the displayed node when they're downstream
     // of the display node, or when nothing is displayed.
-    if (!net().displayNode() || (connectFrom >= 0 && net().displayNode() && net().displayNode()->id() == connectFrom))
+    // A Ground Plane is always shown anyway, so it never takes the display flag.
+    if (type != "groundplane" &&
+        (!net().displayNode() || (connectFrom >= 0 && net().displayNode() && net().displayNode()->id() == connectFrom)))
         setDisplay(n);
     select(n);
     return n;
@@ -353,9 +356,25 @@ void App::cookDisplay() {
         }
     }
     Node* d = net().displayNode();
-    if (!d) { renderer.clearGeometry(); return; }
-    net().cook(d);
-    renderer.setGeometry(d->geometry(), d->cookStamp());
+    if (d) net().cook(d);
+    // Ground Plane nodes (top level) are always shown, like lights: add them to what is displayed
+    std::vector<Node*> planes = groundPlanes(graph, &net() == &graph ? d : nullptr, false);
+    if (planes.empty()) {
+        if (!d) { renderer.clearGeometry(); return; }
+        renderer.setGeometry(d->geometry(), d->cookStamp());
+    } else {
+        uint64_t stamp = d ? d->cookStamp() * 1099511628211ull + uint64_t(d->id()) : 7;
+        for (Node* p : planes) stamp = (stamp ^ (p->cookStamp() * 2654435761ull + uint64_t(p->id()))) * 1099511628211ull;
+        stamp |= 1ull << 63; // never equal to a plain node stamp
+        if (stamp != groundStamp_) {
+            groundStamp_ = stamp;
+            Geometry shown;
+            sceneGeometry(graph, &net() == &graph ? d : nullptr, false, shown);
+            if (d && &net() != &graph) shown.merge(d->geometry()); // display inside a subnet
+            renderer.setGeometry(shown, stamp);
+        }
+        if (!d) return;
+    }
     // also cook the selected node so its info (errors, counts) is fresh in the UI
     if (Node* c = current()) net().cook(c);
     if (frameOnNextCook_) {

@@ -8,6 +8,8 @@
 namespace hd {
 
 class Graph;
+class Node;
+class Geometry;
 struct NodeType;
 
 struct Light {
@@ -39,6 +41,14 @@ struct SceneCamera {
 };
 
 std::vector<Light> collectLights(const Graph& g, float frame);
+// Ground Plane nodes are scene-level too: the ones in g that aren't bypassed and aren't already
+// part of what `display` shows (the display node or anything upstream of it). Cooked at g.frame.
+// forRender skips planes whose "Show in Renders" is off.
+std::vector<Node*> groundPlanes(Graph& g, const Node* display, bool forRender);
+// What the viewport and renders show: the display node's geometry plus those ground planes
+// (as packed prims, so each keeps its own attributes).
+// Returns how many ground planes were added (renders then turn off their own built-in ground).
+int sceneGeometry(Graph& g, Node* display, bool forRender, Geometry& out);
 std::vector<SceneCamera> collectCameras(const Graph& g, float frame);
 // Rotation (degrees, XYZ order) that aims a light or camera at `target` from `from`.
 Vec3 aimRotation(const Vec3& from, const Vec3& target);

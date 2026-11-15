@@ -67,6 +67,12 @@ void App::loadPrefs() {
         o.gridCells = int(d.get("gridCells").num(def.gridCells));
         o.gridRuler = int(d.get("gridRuler").num(def.gridRuler));
         o.gridOpacity = float(d.get("gridOpacity").num(def.gridOpacity));
+        o.gridInfinite = d.get("gridInfinite").boolean(def.gridInfinite);
+        if (!d.has("gridInfinite")) { // preferences from before the endless reference plane: start from its defaults
+            o.grid = def.grid;
+            o.gridOpacity = def.gridOpacity;
+        }
+        o.gridRulerType = std::clamp(int(d.get("gridRulerType").num(def.gridRulerType)), 0, 1);
         o.bgTop = toVec(d.get("bgTop"), def.bgTop);
         o.bgBottom = toVec(d.get("bgBottom"), def.bgBottom);
         showPointNumbers = d.get("pointNumbers").boolean(false);
@@ -86,6 +92,7 @@ void App::savePrefs() {
     d["grid"] = o.grid; d["gridPlane"] = o.gridPlane; d["gridOrigin"] = vec(o.gridOrigin);
     d["gridSpacing"] = double(o.gridSpacing); d["gridCells"] = o.gridCells; d["gridRuler"] = o.gridRuler;
     d["gridOpacity"] = double(o.gridOpacity);
+    d["gridInfinite"] = o.gridInfinite; d["gridRulerType"] = o.gridRulerType;
     d["bgTop"] = vec(o.bgTop); d["bgBottom"] = vec(o.bgBottom);
     d["pointNumbers"] = showPointNumbers; d["primNumbers"] = showPrimNumbers;
     j["display"] = d;
@@ -388,9 +395,14 @@ void App::drawDisplayOptions() {
             ch |= ImGui::Combo("Plane", &o.gridPlane, planes, 3);
             ch |= ImGui::DragFloat3("Origin", &o.gridOrigin.x, 0.05f);
             ch |= ImGui::DragFloat("Grid Spacing", &o.gridSpacing, 0.01f, 0.001f, 1000.f, "%.3f");
+            ch |= ImGui::Checkbox("Infinite (fade toward the horizon)", &o.gridInfinite);
+            ImGui::BeginDisabled(o.gridInfinite);
             ch |= ImGui::DragInt("Grid Size (cells)", &o.gridCells, 1, 2, 400);
+            ImGui::EndDisabled();
             ch |= ImGui::DragInt("Ruler Every", &o.gridRuler, 0.1f, 1, 100, "%d cells");
             ch |= ImGui::SliderFloat("Opacity", &o.gridOpacity, 0.05f, 1.f);
+            const char* rulers[] = {"No Ruler", "Ruler on Main Axis"};
+            ch |= ImGui::Combo("Ruler Type", &o.gridRulerType, rulers, 2);
             o.gridSpacing = std::max(o.gridSpacing, 0.001f);
             o.gridCells = std::clamp(o.gridCells, 2, 400);
             o.gridRuler = std::max(o.gridRuler, 1);
