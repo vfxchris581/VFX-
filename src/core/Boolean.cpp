@@ -80,6 +80,8 @@ struct Mesh {
         }
         order.resize(tris.size());
         for (size_t i = 0; i < tris.size(); ++i) order[i] = int(i);
+        std::vector<Vec3> cen(tris.size());
+        for (size_t i = 0; i < tris.size(); ++i) cen[i] = tris[i].p[0] + tris[i].p[1] + tris[i].p[2];
         nodes.clear();
         if (tris.empty()) return;
         nodes.reserve(tris.size() * 2);
@@ -101,10 +103,8 @@ struct Mesh {
             int axis = ext.x > ext.y ? (ext.x > ext.z ? 0 : 2) : (ext.y > ext.z ? 1 : 2);
             if (j.hi - j.lo <= 4 || ext[axis] <= 0) { nodes[size_t(j.node)].first = j.lo; nodes[size_t(j.node)].count = j.hi - j.lo; continue; }
             int mid = (j.lo + j.hi) / 2;
-            std::nth_element(order.begin() + j.lo, order.begin() + mid, order.begin() + j.hi, [&](int a, int b) {
-                const Tri& ta = tris[size_t(a)]; const Tri& tb = tris[size_t(b)];
-                return ta.p[0][axis] + ta.p[1][axis] + ta.p[2][axis] < tb.p[0][axis] + tb.p[1][axis] + tb.p[2][axis];
-            });
+            std::nth_element(order.begin() + j.lo, order.begin() + mid, order.begin() + j.hi,
+                             [&](int a, int b) { return cen[size_t(a)][axis] < cen[size_t(b)][axis]; }); // stored keys: see cutTriangle
             int l = int(nodes.size());
             nodes.push_back(Node()); nodes.push_back(Node());
             nodes[size_t(j.node)].left = l; nodes[size_t(j.node)].right = l + 1;
@@ -440,8 +440,15 @@ std::vector<Poly> cutTriangle(const Tri& tr, const std::vector<Seg>& segs, doubl
     std::vector<std::pair<int, int>> edges;
     for (size_t i = 0; i < in.size(); ++i) {
         std::vector<Vec3> chain{in[i].a};
-        std::sort(cuts[i].begin(), cuts[i].end(), [&](const Vec3& p, const Vec3& q) { return length(p - in[i].a) < length(q - in[i].a); });
-        for (auto& x : cuts[i]) chain.push_back(x);
+        // order the crossings along the segment by a key computed once per point (a comparator that
+        // recomputes distances can disagree with itself after optimisation, which std::sort does not survive)
+        std::vector<std::pair<float, size_t>> keyed;
+        for (size_t k = 0; k < cuts[i].size(); ++k) {
+            float key = dot(cuts[i][k] - in[i].a, in[i].b - in[i].a);
+            keyed.push_back({key == key ? key : 0.f, k}); // never a NaN key
+        }
+        std::sort(keyed.begin(), keyed.end());
+        for (auto& [key, k] : keyed) chain.push_back(cuts[i][k]);
         chain.push_back(in[i].b);
         std::vector<int> ids;
         for (auto& p : chain) ids.push_back(cd.insert(p));
