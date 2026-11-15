@@ -1,0 +1,106 @@
+{
+  "display": "OUT",
+  "format": "hd-graph",
+  "fps": 24,
+  "frame": 1,
+  "nodes": [
+    {
+      "inputs": [],
+      "name": "wall",
+      "parms": {
+        "size": [3, 2, 0.300000012],
+        "t": [0, 1, 0]
+      },
+      "type": "box",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "inputs": ["wall", null],
+      "name": "fracture",
+      "parms": {
+        "pieces": 40,
+        "seed": 3
+      },
+      "type": "voronoifracture",
+      "x": 0,
+      "y": 92
+    },
+    {
+      "inputs": [],
+      "name": "ball",
+      "parms": {
+        "rad": [0.300000012, 0.300000012, 0.300000012],
+        "t": [0, 1.10000002, -3]
+      },
+      "type": "sphere",
+      "x": 220,
+      "y": 0
+    },
+    {
+      "inputs": ["ball"],
+      "name": "ball_color",
+      "parms": {
+        "class": 1
+      },
+      "type": "color",
+      "x": 220,
+      "y": 92
+    },
+    {
+      "inputs": ["ball_color"],
+      "name": "ball_velocity",
+      "parms": {
+        "name": "v",
+        "type": 1,
+        "value": [0, 0, 30]
+      },
+      "type": "attribcreate",
+      "x": 220,
+      "y": 184
+    },
+    {
+      "inputs": ["fracture", "ball_velocity", null, null, null, null, null, null],
+      "name": "merge",
+      "parms": {},
+      "type": "merge",
+      "x": 0,
+      "y": 276
+    },
+    {
+      "inputs": ["merge", null],
+      "name": "rbd",
+      "parms": {
+        "gluestrength": 2
+      },
+      "type": "rbdsolver",
+      "x": 0,
+      "y": 368
+    },
+    {
+      "inputs": ["rbd"],
+      "name": "OUT",
+      "parms": {},
+      "type": "null",
+      "x": 0,
+      "y": 460
+    }
+  ],
+  "range": [1, 96],
+  "render": {
+    "bounces": 4,
+    "camera": [0, 0.800000012, 0, -35, 18, 9, 45],
+    "curveWidth": 0.0120000001,
+    "exposure": 1,
+    "ground": true,
+    "groundY": 0,
+    "height": 540,
+    "samples": 64,
+    "skyIntensity": 1,
+    "sunAzimuth": 40,
+    "sunElevation": 50,
+    "sunIntensity": 3,
+    "width": 960
+  },
+  "version": 1
+}

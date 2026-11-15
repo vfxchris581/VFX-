@@ -58,6 +58,7 @@ jobs:
           cp build/hdc dist/HD/
           cp -R examples dist/HD/examples
           cp README.md dist/HD/
+          ln -s /Applications dist/HD/Applications
           hdiutil create -volname "HD" -srcfolder dist/HD -ov -format UDZO dist/${{ matrix.artifact }}.dmg
 
       - name: Package (Windows)
@@ -70,6 +71,18 @@ jobs:
           Copy-Item -Recurse examples dist/HD/examples
           Copy-Item README.md dist/HD/
           Compress-Archive -Path dist/HD -DestinationPath dist/${{ matrix.artifact }}.zip
+
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            choco install nsis -y --no-progress
+          }
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(HD VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          & $makensis /V2 "/DVERSION=$version" "/DSRCDIR=dist\HD" "/DOUTFILE=dist\HD-Windows-Setup.exe" packaging\windows\installer.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -86,6 +99,7 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+            dist/*.exe
             dist/*.tar.gz
 
       - name: Publish release
@@ -95,4 +109,5 @@ jobs:
           files: |
             dist/*.dmg
             dist/*.zip
+            dist/*.exe
             dist/*.tar.gz

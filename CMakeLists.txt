@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(HD VERSION 0.1.0 LANGUAGES C CXX)
+project(HD VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,7 +16,9 @@ option(HD_BUILD_UI_SCREENSHOT_TEST "Linux only: run the UI headlessly via EGL an
 # ------------------------------------------------------------------ core engine
 add_library(hd_core STATIC
   src/core/Demo.cpp
+  src/core/Destruction.cpp
   src/core/Expr.cpp
+  src/core/Fracture.cpp
   src/core/GeoIO.cpp
   src/core/Geometry.cpp
   src/core/Json.cpp
@@ -48,6 +50,7 @@ if(HD_BUILD_TESTS)
   enable_testing()
   add_executable(hd_tests tests/test_core.cpp)
   target_link_libraries(hd_tests PRIVATE hd_core)
+  target_compile_definitions(hd_tests PRIVATE HD_EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/examples")
   add_test(NAME hd_tests COMMAND hd_tests)
 endif()
 

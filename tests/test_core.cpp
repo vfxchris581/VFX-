@@ -1,6 +1,7 @@
 // Headless tests for the HD core engine.
 #include "core/Demo.h"
 #include "core/Expr.h"
+#include "core/Fracture.h"
 #include "core/GeoIO.h"
 #include "core/Lights.h"
 #include "core/Node.h"
@@ -8,6 +9,7 @@
 #include "core/PathTracer.h"
 #include "core/Volume.h"
 #include <cstdio>
+#include <filesystem>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
@@ -977,6 +979,216 @@ TEST(demo_scenes_cook_cleanly) {
         CHECK(g2.nodes().size() == g.nodes().size());
     }
 }
+
+
+// ---------------------------------------------------------------- destruction
+
+static std::vector<Geometry> splitPieces(const Geometry& g) {
+    std::map<int, std::vector<int>> by;
+    const Attrib* pa = g.findAttrib(AttribClass::Prim, "piece");
+    for (size_t i = 0; i < g.numPrims(); ++i) by[pa ? int(pa->getF(i)) : 0].push_back(int(i));
+    std::vector<Geometry> out;
+    for (auto& [k, prims] : by) out.push_back(g.extractPrims(prims));
+    return out;
+}
+
+TEST(convex_hull_and_mass) {
+    std::vector<Vec3> pts;
+    for (int i = 0; i < 8; ++i) pts.push_back(Vec3(i & 1 ? 1.f : 0.f, i & 2 ? 1.f : 0.f, i & 4 ? 1.f : 0.f));
+    for (int i = 0; i < 50; ++i) pts.push_back(Vec3(hashRandom(uint32_t(i * 3)), hashRandom(uint32_t(i * 3 + 1)), hashRandom(uint32_t(i * 3 + 2))) * 0.9f + Vec3(0.05f));
+    ConvexHull h;
+    CHECK(buildConvexHull(pts, h));
+    CHECK(h.pts.size() == 8);
+    CHECK(h.tris.size() == 36);
+    CHECK(h.planes.size() == 6);
+    CHECK(h.distance(Vec3(0.5f)) < -0.49f);
+    CHECK(std::fabs(h.distance(Vec3(2, 0.5f, 0.5f)) - 1.f) < 1e-4f);
+    MassProps mp = computeMassProps(h.pts, h.tris);
+    NEAR(mp.volume, 1.0);
+    CHECK(length(mp.com - Vec3(0.5f)) < 1e-5f);
+    NEAR(mp.inertia[0][0], 1.0 / 6.0); NEAR(mp.inertia[1][1], 1.0 / 6.0); NEAR(mp.inertia[2][2], 1.0 / 6.0);
+    NEAR(mp.inertia[0][1], 0.0); NEAR(mp.inertia[1][2], 0.0);
+    // flat input is thickened into a slab instead of failing
+    std::vector<Vec3> flat = {Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(1, 0, 1), Vec3(0, 0, 1)};
+    CHECK(buildConvexHull(flat, h, 0.01f));
+    CHECK(computeMassProps(h.pts, h.tris).volume > 0);
+    // ear clipping with a hole: a 4x4 square minus a 2x2 square = 12
+    std::vector<Vec3> sq = {Vec3(0, 0, 0), Vec3(4, 0, 0), Vec3(4, 4, 0), Vec3(0, 4, 0), Vec3(1, 1, 0), Vec3(1, 3, 0), Vec3(3, 3, 0), Vec3(3, 1, 0)};
+    std::vector<int> tris;
+    CHECK(triangulatePolygon(sq, {{0, 1, 2, 3}, {4, 5, 6, 7}}, Vec3(0, 0, 1), tris));
+    double area = 0;
+    bool allCCW = true;
+    for (size_t k = 0; k < tris.size(); k += 3) {
+        Vec3 c = cross(sq[size_t(tris[k + 1])] - sq[size_t(tris[k])], sq[size_t(tris[k + 2])] - sq[size_t(tris[k])]);
+        area += 0.5 * c.z;
+        if (c.z < -1e-6f) allCCW = false;
+    }
+    NEAR(area, 12.0);
+    CHECK(allCCW);
+}
+
+TEST(voronoi_fracture) {
+    // box cut by explicit cells: every piece is a closed, outward-facing mesh and volume is conserved
+    Graph g;
+    Node* box = g.createNode("box");
+    box->parm("size")->val[0] = 2; box->parm("size")->val[1] = 1; box->parm("size")->val[2] = 1.5f;
+    Node* fr = g.createNode("voronoifracture");
+    g.connect(box, fr, 0);
+    fr->parm("pieces")->val[0] = 25;
+    g.cook(fr);
+    CHECK(fr->error().empty());
+    auto pieces = splitPieces(fr->geometry());
+    CHECK(pieces.size() == 25);
+    double total = 0;
+    bool closed = true, positive = true;
+    for (auto& p : pieces) {
+        closed = closed && closedManifold(fusePoints(p, 1e-6f));
+        float v = signedVolume(p);
+        positive = positive && v > 0;
+        total += v;
+    }
+    CHECK(closed);
+    CHECK(positive);
+    CHECK(std::fabs(total - 3.0) < 1e-3);
+    const Attrib* inside = fr->geometry().findAttrib(AttribClass::Prim, "inside");
+    CHECK(inside != nullptr);
+    if (inside) { int n = 0; for (size_t i = 0; i < inside->count(); ++i) n += inside->getF(i) > 0.5f; CHECK(n > 25); }
+    // a non-convex mesh (torus) cut through its hole: caps with holes still give closed pieces
+    Node* tor = g.createNode("torus");
+    tor->parm("rows")->val[0] = 32; tor->parm("cols")->val[0] = 16;
+    Node* fr2 = g.createNode("voronoifracture");
+    g.connect(tor, fr2, 0);
+    fr2->parm("pieces")->val[0] = 12;
+    g.cook(fr2);
+    CHECK(fr2->error().empty());
+    double tv = signedVolume(tor->geometry());
+    pieces = splitPieces(fr2->geometry());
+    CHECK(pieces.size() == 12);
+    total = 0; closed = true;
+    for (auto& p : pieces) { total += signedVolume(p); closed = closed && closedManifold(fusePoints(p, 1e-6f)); }
+    CHECK(closed);
+    CHECK(std::fabs(total - tv) < 1e-3 * tv);
+    // explicit cut points on input 2: two points split a box into two halves
+    Geometry two; two.addPoint(Vec3(-0.5f, 0, 0)); two.addPoint(Vec3(0.5f, 0, 0));
+    Geometry cube = box->geometry();
+    FractureStats st;
+    Geometry halves = voronoiFracture(cube, two.P, FractureOptions(), &st);
+    CHECK(st.pieces == 2);
+    auto hp = splitPieces(halves);
+    CHECK(hp.size() == 2);
+    if (hp.size() == 2) { NEAR(signedVolume(hp[0]), 1.5); NEAR(signedVolume(hp[1]), 1.5); }
+    // a cell point outside the mesh yields no piece
+    two.addPoint(Vec3(10, 10, 10));
+    voronoiFracture(cube, two.P, FractureOptions(), &st);
+    CHECK(st.pieces == 2 && st.emptyCells == 1);
+}
+
+TEST(rbd_solver) {
+    // a single box dropped from 2 m lands on the ground, comes to rest flat and stays there
+    Graph g;
+    Node* box = g.createNode("box");
+    box->parm("t")->val[1] = 2;
+    Node* rbd = g.createNode("rbdsolver");
+    g.connect(box, rbd, 0);
+    g.frame = 1; g.cook(rbd);
+    CHECK(rbd->error().empty());
+    Vec3 mn, mx; rbd->geometry().bounds(mn, mx);
+    NEAR(mn.y, 1.5);
+    // free fall for 0.25 s: y = 2 - 0.5 g t^2 (substeps make it slightly different; allow 1 cm)
+    g.frame = 7; g.cook(rbd);
+    rbd->geometry().bounds(mn, mx);
+    CHECK(std::fabs((mn.y + 0.5f) - (2.f - 0.5f * 9.81f * 0.25f * 0.25f)) < 0.01f);
+    g.frame = 96; g.cook(rbd);
+    rbd->geometry().bounds(mn, mx);
+    CHECK(mn.y > -0.01f && mn.y < 0.01f);
+    CHECK(std::fabs(mx.y - 1.f) < 0.02f);
+    const Attrib* v = rbd->geometry().findAttrib(AttribClass::Point, "v");
+    CHECK(v && length(v->getV(0)) < 0.05f);
+    CHECK(rbd->simCacheStart == 2 && rbd->simCacheEnd == 96);
+    // scrubbing back is served from the cache and is deterministic
+    g.frame = 7; g.cook(rbd);
+    Geometry a = rbd->geometry();
+    box->parm("divs")->val[0] = 1; box->touch();
+    g.cook(rbd);
+    bool same = a.numPoints() == rbd->geometry().numPoints();
+    for (size_t i = 0; i < a.numPoints() && same; ++i) same = length(a.P[i] - rbd->geometry().P[i]) < 1e-5f;
+    CHECK(same);
+
+    // a glued, fractured block sitting on the ground holds together
+    Graph g2;
+    Node* blk = g2.createNode("box");
+    blk->parm("size")->val[0] = 2; blk->parm("t")->val[1] = 0.5f;
+    Node* fr = g2.createNode("voronoifracture");
+    g2.connect(blk, fr, 0);
+    fr->parm("pieces")->val[0] = 12;
+    Node* r2 = g2.createNode("rbdsolver");
+    g2.connect(fr, r2, 0);
+    g2.frame = 48; g2.cook(r2);
+    CHECK(r2->error().empty());
+    double maxMove = 0;
+    for (size_t i = 0; i < fr->geometry().numPoints(); ++i) maxMove = std::max(maxMove, double(length(fr->geometry().P[i] - r2->geometry().P[i])));
+    CHECK(maxMove < 0.02);
+    // without glue the pieces may slide on their slanted cuts, but settle without exploding or sinking
+    r2->parm("glue")->val[0] = 0; r2->touch();
+    g2.cook(r2);
+    maxMove = 0;
+    for (size_t i = 0; i < fr->geometry().numPoints(); ++i) maxMove = std::max(maxMove, double(length(fr->geometry().P[i] - r2->geometry().P[i])));
+    CHECK(maxMove < 0.5);
+    r2->geometry().bounds(mn, mx);
+    CHECK(mn.y > -0.01f);
+
+    // a fast projectile (v attribute) breaks the glued block apart
+    r2->parm("glue")->val[0] = 1; r2->touch();
+    Node* ball = g2.createNode("sphere");
+    ball->parm("rad")->val[0] = ball->parm("rad")->val[1] = ball->parm("rad")->val[2] = 0.25f;
+    ball->parm("t")->val[0] = -2.5f; ball->parm("t")->val[1] = 0.5f;
+    Node* vel = g2.createNode("attribcreate");
+    vel->parm("name")->str = "v";
+    vel->parm("type")->val[0] = 1;
+    vel->parm("value")->val[0] = 25;
+    g2.connect(ball, vel, 0);
+    Node* mg = g2.createNode("merge");
+    g2.connect(fr, mg, 0);
+    g2.connect(vel, mg, 1);
+    g2.connect(mg, r2, 0);
+    r2->parm("density")->val[0] = 1000;
+    g2.frame = 30; g2.cook(r2);
+    CHECK(r2->error().empty());
+    // count pieces that moved noticeably: the impact must have knocked several loose
+    int moved = 0;
+    const Geometry& out = r2->geometry();
+    const Attrib* pp = out.findAttrib(AttribClass::Point, "piece");
+    std::map<int, double> moveBy;
+    size_t nfr = fr->geometry().numPoints();
+    for (size_t i = 0; i < nfr && i < out.numPoints(); ++i) moveBy[pp ? int(pp->getF(i)) : 0] = std::max(moveBy[pp ? int(pp->getF(i)) : 0], double(length(out.P[i] - mg->geometry().P[i])));
+    for (auto& [k, m] : moveBy) moved += m > 0.1;
+    CHECK(moved >= 2);
+    // nothing tunnels through the ground
+    out.bounds(mn, mx);
+    CHECK(mn.y > -0.05f);
+}
+
+#ifdef HD_EXAMPLES_DIR
+TEST(example_files_cook_cleanly) {
+    int n = 0;
+    for (auto& e : std::filesystem::directory_iterator(HD_EXAMPLES_DIR)) {
+        if (e.path().extension() != ".hdg") continue;
+        ++n;
+        Graph g;
+        std::string err;
+        CHECK(g.load(e.path().string(), &err));
+        for (float f : {1.f, 24.f}) {
+            g.frame = f;
+            for (auto& nd : g.nodes()) {
+                g.cook(nd.get());
+                if (!nd->error().empty()) std::printf("  %s node %s: %s\n", e.path().filename().string().c_str(), nd->name().c_str(), nd->error().c_str());
+                CHECK(nd->error().empty());
+            }
+        }
+    }
+    CHECK(n >= 11);
+}
+#endif
 
 int main() {
     for (auto& t : tests()) {

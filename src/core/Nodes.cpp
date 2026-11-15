@@ -11,6 +11,7 @@ namespace hd {
 void registerSimNodes(std::vector<NodeType>& types);    // Sim.cpp
 void registerVolumeNodes(std::vector<NodeType>& types); // Pyro.cpp
 void registerLightNodes(std::vector<NodeType>& types);  // Lights.cpp
+void registerDestructionNodes(std::vector<NodeType>& types); // Destruction.cpp
 namespace {
 
 // ---- parameter builders
@@ -938,6 +939,7 @@ std::vector<NodeType> buildTypes() {
     registerSimNodes(types);
     registerVolumeNodes(types);
     registerLightNodes(types);
+    registerDestructionNodes(types);
     return types;
 }
 
