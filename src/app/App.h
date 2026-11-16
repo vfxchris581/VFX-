@@ -156,6 +156,9 @@ public:
     void updateSceneCamera(bool navigated, float viewAspect); // look-through / lock handling
     void updateGuides();
     Node* activeCameraNode();
+    // The network editor pans to show this node (by name, in the current network) on its next draw.
+    void revealNode(const Node* n) { revealName_ = n ? n->name() : std::string(); }
+    std::string revealName_;
     bool showShelf = true;
     bool lockCamera = false;
     float activeCamAspect = 0; // > 0 while looking through a camera node

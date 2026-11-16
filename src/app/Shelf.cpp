@@ -179,39 +179,70 @@ void App::shelfTool(const std::string& tool) {
             Node* n = graph.createNode(type, left - 280, top + float(stacked++) * 70.f);
             return n;
         };
+        // Lights go where they light the scene; if that is outside the current view, they go in the
+        // upper part of the view instead, so they show up where you are looking.
+        const Vec3 eye = camera.eye(), fwd = normalize(camera.target - eye);
+        const Vec3 right = normalize(cross(fwd, Vec3(0, 1, 0))), up = cross(right, fwd);
+        const float tanY = std::tan(radians(camera.fovY) * 0.5f);
+        const float tanX = tanY * (viewportH_ > 0 ? viewportW_ / viewportH_ : 16.f / 9.f);
+        const float viewDist = length(camera.target - eye);
+        auto inView = [&](const Vec3& p) {
+            Vec3 v = p - eye;
+            float depth = dot(v, fwd);
+            if (camera.ortho()) return std::fabs(dot(v, right)) < tanX * viewDist * 0.85f && std::fabs(dot(v, up)) < tanY * viewDist * 0.85f;
+            return depth > viewDist * 0.05f && std::fabs(dot(v, right)) < tanX * depth * 0.85f && std::fabs(dot(v, up)) < tanY * depth * 0.85f;
+        };
+        auto place = [&](const Vec3& wanted, float side) {
+            if (inView(wanted)) return wanted;
+            // three quarters of the way to the target, across the upper part of the frame; each new
+            // light takes the next spot along so they don't land on top of each other
+            (void)side;
+            const float d = camera.ortho() ? viewDist : viewDist * 0.75f;
+            const float slot = float((stacked - 1) % 5) * 0.3f - 0.6f;
+            return eye + fwd * d + up * (tanY * d * 0.55f) + right * (tanX * d * slot);
+        };
         auto setV = [](Node* n, const char* p, const Vec3& val) { Parm* q = n->parm(p); q->val[0] = val.x; q->val[1] = val.y; q->val[2] = val.z; };
         // local lights fall off with distance squared, so start them bright enough for their distance
         auto forDistance = [](float dist, float level) { return level * dist * dist; };
         Node* made = nullptr;
         if (tool == "camera") {
+            // a camera that sees what the view sees; the view then steps back and around a little so
+            // the new camera is in sight (look through it from the viewport's camera menu)
             made = make("camera");
-            Vec3 eye = camera.eye();
+            const bool throughCamera = activeCameraNode() != nullptr;
             setV(made, "t", eye);
             setV(made, "r", aimRotation(eye, camera.target));
             const float aspect = 1280.f / 720.f, tanx = std::tan(radians(camera.fovY) * 0.5f) * aspect;
             made->parm("focal")->val[0] = made->parm("aperture")->val[0] * 0.5f / tanx;
-            graph.render.cameraName = made->name(); // look through the new camera
+            if (!throughCamera) {
+                if (camera.ortho()) camera.axisView = Camera::Persp;
+                camera.dist *= 1.9f;
+                camera.yaw += 25.f;
+                camera.pitch = std::clamp(camera.pitch + 10.f, -80.f, 80.f);
+            }
         } else if (tool == "pointlight") {
             made = make("pointlight");
-            setV(made, "t", ctr + Vec3(0.8f, 1.2f, 0.8f) * R);
-            made->parm("light_intensity")->val[0] = forDistance(length(Vec3(0.8f, 1.2f, 0.8f)) * R, 1.2f);
+            Vec3 p = place(ctr + Vec3(0.8f, 1.2f, 0.8f) * R, 1);
+            setV(made, "t", p);
+            made->parm("light_intensity")->val[0] = forDistance(std::max(0.5f, length(p - ctr)), 1.2f);
         } else if (tool == "spotlight") {
             made = make("spotlight");
-            Vec3 p = ctr + Vec3(1.2f, 1.6f, 1.2f) * R;
+            Vec3 p = place(ctr + Vec3(1.2f, 1.6f, 1.2f) * R, 1);
             setV(made, "t", p);
             setV(made, "r", aimRotation(p, ctr));
-            made->parm("light_intensity")->val[0] = forDistance(length(Vec3(1.2f, 1.6f, 1.2f)) * R, 2.4f);
+            made->parm("light_intensity")->val[0] = forDistance(std::max(0.5f, length(p - ctr)), 2.4f);
         } else if (tool == "arealight") {
             made = make("arealight");
-            Vec3 p = ctr + Vec3(0, 1.8f, 0) * R;
+            Vec3 p = place(ctr + Vec3(0, 1.8f, 0) * R, 0);
             setV(made, "t", p);
             setV(made, "r", Vec3(-90, 0, 0));
-            setV(made, "areasize", Vec3(R, R, 0));
-            made->parm("light_intensity")->val[0] = forDistance(1.8f * R, 2.2f);
+            const float s = std::min(R, std::max(0.5f, length(p - ctr) * 0.5f));
+            setV(made, "areasize", Vec3(s, s, 0));
+            made->parm("light_intensity")->val[0] = forDistance(std::max(0.5f, length(p - ctr)), 2.2f);
         } else if (tool == "distantlight" || tool == "skylight") {
-            if (tool == "skylight") { Node* e = make("envlight"); setV(e, "t", ctr + Vec3(-1.2f, 1.6f, 0) * R); }
+            if (tool == "skylight") { Node* e = make("envlight"); setV(e, "t", place(ctr + Vec3(-1.2f, 1.6f, 0) * R, -1)); }
             made = make("distantlight");
-            setV(made, "t", ctr + Vec3(0, 1.9f, 0) * R);
+            setV(made, "t", place(ctr + Vec3(0, 1.9f, 0) * R, 0.3f));
             setV(made, "r", Vec3(-50, 40, 0));
         } else if (tool == "groundplane") {
             // one floor under the scene, big enough to reach well past it; the display flag stays put
@@ -223,12 +254,13 @@ void App::shelfTool(const std::string& tool) {
             made->parm("tile")->val[0] = size > 80 ? std::pow(10.f, std::floor(std::log10(size / 40.f))) : 1.f;
         } else if (tool == "envlight" || tool == "ambientlight") {
             made = make("envlight");
-            setV(made, "t", ctr + Vec3(-1.2f, 1.6f, 0) * R);
+            setV(made, "t", place(ctr + Vec3(-1.2f, 1.6f, 0) * R, -1));
             if (tool == "ambientlight") { made->parm("env_mode")->val[0] = 1; made->parm("light_intensity")->val[0] = 0.4f; }
         }
         if (made) {
             select(made);
-            status(tool == "camera"        ? "Created " + made->name() + " from the current view. Turn on Lock to move it with the view."
+            revealNode(made);
+            status(tool == "camera"        ? "Created " + made->name() + " from the current view. Look through it from the viewport's camera menu (No cam v)."
                    : tool == "groundplane" ? "Created " + made->name() + ": always shown under the scene, in the viewport and renders. Bypass hides it."
                                            : "Created " + made->name() + ". Lights replace the default sun and sky in the Render View.");
         }
@@ -247,6 +279,7 @@ void App::shelfTool(const std::string& tool) {
     }
     Node* n = createNode(tool, x, y, from);
     if (n && t->maxInputs == 0) setDisplay(n);
+    if (n) revealNode(n);
 }
 
 void App::drawShelf() {

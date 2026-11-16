@@ -14,6 +14,10 @@ Phases 8 to 13: installers and releases, packed primitives and instancing, rigid
 - Zoom and pan (wheel, drag, double-click to fit, 1:1), view one channel or alpha, exposure for EXR / HDR, the pixel value under the mouse. Keys: Space play/pause, arrows step, Home/End, F fit.
 - A finished Render Sequence is loaded into the player automatically.
 
+### Fixes
+
+- Lights and Cameras shelf: a new light now appears inside the current view (where the scene's preferred spot is out of view, lights line up across the top of the frame), and the Camera tool shows the new camera in the scene instead of silently looking through it (look through it from the viewport's camera menu). The network view pans to every node made from the shelf, which used to land outside the visible area.
+
 ### Movies (MP4 and MOV)
 
 - Save a sequence as an H.264 movie in `.mp4` or QuickTime `.mov`: "Save Movie..." in the Sequence Player (runs in the background, with progress and Cancel), or name the Render Sequence output `.mp4` / `.mov` to render straight to a movie (the frames are also kept as PNGs in a `_frames` folder so the Sequence Player can play them). Quality: High, Medium or Small.

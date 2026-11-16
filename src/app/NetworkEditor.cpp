@@ -94,6 +94,19 @@ void NetworkEditor::draw(App& app) {
     if (size.x < 4 || size.y < 4) { ImGui::End(); return; }
     // Wait a couple of frames so docking has settled the window size before framing.
     if (wantFrameAll_ && ++frameAllDelay_ > 2) { frameAll(app); wantFrameAll_ = false; frameAllDelay_ = 0; }
+    // a node made from the shelf: pan (as little as needed) so it is in view
+    if (!app.revealName_.empty() && !wantFrameAll_) {
+        if (const Node* n = app.net().findNode(app.revealName_)) {
+            const float m = 40;
+            const float sx1 = offset_.x + (n->x + kNodeW + 110) * zoom_;
+            const float sy0 = offset_.y + n->y * zoom_, sy1 = offset_.y + (n->y + kNodeH) * zoom_;
+            if (sx1 > size.x - m) offset_.x -= sx1 - (size.x - m);
+            if (offset_.x + n->x * zoom_ < m) offset_.x = m - n->x * zoom_; // the left edge wins
+            if (sy1 > size.y - m) offset_.y -= sy1 - (size.y - m);
+            if (offset_.y + n->y * zoom_ < m) offset_.y = m - n->y * zoom_;
+        }
+        app.revealName_.clear();
+    }
 
     ImGui::InvisibleButton("##canvas", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
     bool hovered = ImGui::IsItemHovered();

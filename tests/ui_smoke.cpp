@@ -111,6 +111,32 @@ int main(int argc, char** argv) {
     auto save = [&](const std::string& name) { savePPM(outDir + "/" + name + ".ppm", W, H); };
     for (int i = 0; i < 4; ++i) runFrame();
 
+    // Lights and Cameras shelf: what you make shows up in the view (not above it or inside it)
+    {
+        app.loadScene(exDir + "/smoke.hdg");
+        for (int i = 0; i < 4; ++i) runFrame();
+        auto visible = [&](hd::Node* n) {
+            const hd::Parm* t = n ? n->parm("t") : nullptr;
+            if (!t) return false;
+            hd::Vec3 p(t->val[0], t->val[1], t->val[2]);
+            hd::Mat4 vp = app.camera.proj(16.f / 9.f) * app.camera.view();
+            float c[4];
+            for (int r = 0; r < 4; ++r) c[r] = vp.at(r, 0) * p.x + vp.at(r, 1) * p.y + vp.at(r, 2) * p.z + vp.at(r, 3);
+            return c[3] > 0 && std::fabs(c[0] / c[3]) < 1 && std::fabs(c[1] / c[3]) < 1;
+        };
+        const size_t before = app.graph.nodes().size();
+        for (const char* tool : {"pointlight", "spotlight", "arealight", "distantlight", "envlight", "camera"}) {
+            app.shelfTool(tool);
+            for (int i = 0; i < 3; ++i) runFrame();
+            hd::Node* made = app.current();
+            if (!made || made->type().name != (std::string(tool) == "envlight" ? "envlight" : tool)) { std::printf("FAIL shelf %s: nothing selected\n", tool); ++failures; continue; }
+            if (!visible(made)) { std::printf("FAIL shelf %s: %s is outside the view\n", tool, made->name().c_str()); ++failures; }
+        }
+        if (app.graph.nodes().size() != before + 6) { std::printf("FAIL shelf lights: %zu nodes made\n", app.graph.nodes().size() - before); ++failures; }
+        if (app.activeCameraNode()) { std::printf("FAIL shelf camera: the view went through the new camera\n"); ++failures; }
+        save("shelf_lights_and_camera");
+    }
+
     std::vector<std::filesystem::path> scenes;
     for (auto& e : std::filesystem::directory_iterator(exDir)) if (e.path().extension() == ".hdg") scenes.push_back(e.path());
     std::sort(scenes.begin(), scenes.end());
