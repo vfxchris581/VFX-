@@ -3596,11 +3596,12 @@ TEST(movie_writer) {
         MovieWriter mw;
         MovieOptions o;
         o.keyint = 100;
+        o.slices = 1; // the default follows the core count, and each slice has its own header
         auto px = frame(0);
         CHECK(mw.open((dir / "still.mp4").string(), w, h, o, err));
         size_t afterKey = 0;
         for (int f = 0; f < 20; ++f) { CHECK(mw.addFrame(px.data(), err)); if (f == 0) afterKey = mw.bytes(); }
-        CHECK((mw.bytes() - afterKey) / 19 < 40);
+        CHECK((mw.bytes() - afterKey) / 19 < 24);
         CHECK(mw.finish(err));
     }
     // quality presets: smaller files for lower quality
