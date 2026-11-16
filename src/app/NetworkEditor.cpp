@@ -99,7 +99,7 @@ void NetworkEditor::draw(App& app) {
         if (const Node* n = app.net().findNode(app.revealName_)) {
             const float m = 40;
             const float sx1 = offset_.x + (n->x + kNodeW + 110) * zoom_;
-            const float sy0 = offset_.y + n->y * zoom_, sy1 = offset_.y + (n->y + kNodeH) * zoom_;
+            const float sy1 = offset_.y + (n->y + kNodeH) * zoom_;
             if (sx1 > size.x - m) offset_.x -= sx1 - (size.x - m);
             if (offset_.x + n->x * zoom_ < m) offset_.x = m - n->x * zoom_; // the left edge wins
             if (sy1 > size.y - m) offset_.y -= sy1 - (size.y - m);
