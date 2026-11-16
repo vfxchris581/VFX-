@@ -191,6 +191,15 @@ Legend: **Working**: usable and tested. **Partial**: works, with the limits note
 | Editor | Working: diving into a Material Builder shows the shader network; the Tab menu and the Shading shelf list only shading nodes, and the viewport and Render View keep showing the scene. Tested in the app smoke test |
 | Limits | Not done: one output per shading node (use Separate for components; no multi-output VOPs), no shader preview ball, no displacement, no volume or light shaders, three-stop ramps only, the viewport preview is per point (fine patterns need dense meshes; bump is render-only), patterns use P where the geometry is at render time (bind a `rest` attribute to keep them on deforming or moving objects), not exposed to Python yet |
 
+## Sequence Player (MPlay)
+
+| Item | Status |
+|---|---|
+| Playback | Working: opens a numbered PNG / EXR / HDR sequence from any one frame (gaps and a frame-less single image allowed); plays forward and backward at a chosen frame rate with loop, play once and ping-pong; step, scrub, go to frame. Frames decode on background threads ahead of the playhead in the playback direction within a 1.5 GB cache; playback waits for a frame still loading rather than skip it. The last finished Render Sequence loads automatically |
+| Viewing | Working: fit / 1:1 / wheel zoom about the mouse and drag to pan, RGB / single channel / alpha / luminance, exposure for linear files, pixel readout. Unreadable frames show an error instead of stopping playback |
+| Tested | Sequence discovery (gaps, other files with similar names, padding), loading and pixel values, the memory budget while the playhead moves both ways, unreadable frames, EXR exposure and sRGB display; in the app: open, play and loop, step, play once, channel view, a missing sequence |
+| Limits | Not done: audio, flipbooking the viewport straight into the player, comparing two sequences (wipe), EXR passes other than the beauty, saving a movie file (MP4 / MOV), half-resolution playback for sequences larger than the cache |
+
 ## Phase 13: modelling tools
 
 | Item | Status |

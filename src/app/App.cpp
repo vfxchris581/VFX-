@@ -66,6 +66,8 @@ void App::openPath(const std::string& path) {
             frameOnNextCook_ = true;
             status("Imported " + path);
         }
+    } else if (ext == ".png" || ext == ".exr" || ext == ".hdr") {
+        openSequence(path); // dropped images play in the Sequence Player
     } else {
         loadScene(path);
     }
@@ -422,7 +424,10 @@ void App::handleGlobalShortcuts() {
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_RightArrow)) jumpToKey(1);
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_LeftArrow)) jumpToKey(-1);
     }
-    if (!typing) {
+    // the Sequence Player uses the arrow keys for its own frames while it has the focus
+    const ImGuiWindow* nav = ImGui::GetCurrentContext()->NavWindow;
+    const bool playerFocused = nav && std::strncmp(nav->RootWindow->Name, "Sequence Player", 15) == 0;
+    if (!typing && !playerFocused) {
         // Houdini-style: up/down arrow steps frames, left/right too
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) && !io.KeyCtrl) graph.frame = std::min(graph.frame + 1, float(graph.frameEnd));
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) && !io.KeyCtrl) graph.frame = std::max(graph.frame - 1, float(graph.frameStart));
@@ -474,6 +479,7 @@ void App::frame() {
     if (showTimeline) drawTimeline();
     stepSequence();
     if (showRenderView) drawRenderView();
+    if (showSequencePlayer) drawSequencePlayer();
     drawDisplayOptions();
     drawRenderSettings();
     drawAssetManager();
@@ -515,6 +521,7 @@ void App::buildDefaultLayout(unsigned dockIdIn) {
     ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.55f, nullptr, &right);
     ImGui::DockBuilderDockWindow("Scene View", dockId);
     ImGui::DockBuilderDockWindow("Render View", dockId);
+    ImGui::DockBuilderDockWindow("Sequence Player", dockId);
     ImGui::DockBuilderDockWindow("Geometry Spreadsheet", dockId);
     ImGui::DockBuilderDockWindow("Python Shell", dockId);
     ImGui::DockBuilderDockWindow("Parameters", right);
@@ -554,7 +561,7 @@ void App::drawFileDialog() {
     }
     ImGui::SetNextWindowSize(ImVec2(640, 460), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal("File Browser", nullptr)) return;
-    const char* titles[] = {"", "Open Scene", "Save Scene As", "Import OBJ", "Export Geometry (.obj / .ply)", "Choose File", "Save Rendered Image", "Render Sequence To (frame numbers are added)", "Merge Scene", "Install Asset", "Export USD", "Run Python Script"};
+    const char* titles[] = {"", "Open Scene", "Save Scene As", "Import OBJ", "Export Geometry (.obj / .ply)", "Choose File", "Save Rendered Image", "Render Sequence To (frame numbers are added)", "Merge Scene", "Install Asset", "Export USD", "Run Python Script", "Open Image Sequence (pick any frame)"};
     ImGui::TextUnformatted(titles[int(fileMode_)]);
     ImGui::Separator();
     bool saving = fileMode_ == FileDialogMode::SaveAs || fileMode_ == FileDialogMode::ExportObj || fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence || fileMode_ == FileDialogMode::ExportUsd;
@@ -566,6 +573,7 @@ void App::drawFileDialog() {
     else if (fileMode_ == FileDialogMode::ExportUsd) exts = {".usda"};
     else if (fileMode_ == FileDialogMode::ImportObj) exts = {".obj", ".usda"};
     else if (fileMode_ == FileDialogMode::RunPython) exts = {".py"};
+    else if (fileMode_ == FileDialogMode::OpenSequence) exts = {".png", ".exr", ".hdr"};
     else if (fileMode_ == FileDialogMode::ChooseFileParm) {
         // image parameters (texture and environment maps) browse images; others browse geometry
         std::string pn = fileParmTarget.substr(fileParmTarget.find('/') + 1);
@@ -673,6 +681,7 @@ void App::drawFileDialog() {
             break;
         }
         case FileDialogMode::MergeScene: mergeScene(chosen); break;
+        case FileDialogMode::OpenSequence: openSequence(chosen); break;
         case FileDialogMode::RunPython: {
             std::ifstream f(chosen, std::ios::binary);
             std::stringstream ss;

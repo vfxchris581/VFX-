@@ -50,14 +50,16 @@ void App::stepSequence() {
             PathTracer::Buffers buf;
             bool ok = exr ? (tracer_.fetchBuffers(buf) && writeExrPasses(path, buf, true, &err)) : writePng(path, img, w, h, &err);
             if (!ok) { status("Sequence stopped: " + err, true); seqActive_ = false; }
-            else { ++seqCount_; status("Saved " + path); }
+            else { ++seqCount_; status("Saved " + path); player.lastRendered = path; }
             seqWaiting_ = false;
             ++seqFrame_;
         }
         if (seqActive_) {
             if (seqFrame_ > seqEnd_) {
                 seqActive_ = false;
-                status("Sequence finished: " + std::to_string(seqCount_) + " frames");
+                status("Sequence finished: " + std::to_string(seqCount_) + " frames. Play it in the Sequence Player.");
+                // ready to play: loaded into the Sequence Player (without taking the focus)
+                if (!player.lastRendered.empty()) openSequence(player.lastRendered, false);
             } else {
                 graph.frame = float(seqFrame_);
                 startRender();
@@ -154,6 +156,13 @@ void App::drawRenderView() {
     if (ImGui::Button("Render Sequence...")) openFileDialog(FileDialogMode::SaveSequence);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render frames %d-%d (the timeline range) to numbered PNG or EXR files", graph.frameStart, graph.frameEnd);
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Play Sequence...")) {
+        if (!player.lastRendered.empty() && !seqActive_) openSequence(player.lastRendered);
+        else openFileDialog(FileDialogMode::OpenSequence);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(player.lastRendered.empty() ? "Open a rendered image sequence in the Sequence Player" : "Play the last rendered sequence in the Sequence Player");
     ImGui::SameLine();
     if (tracer_.samplesTarget() > 0) {
         if (seqActive_) ImGui::Text("Frame %d / %d   %d / %d samples", seqFrame_, seqEnd_, tracer_.samplesDone(), tracer_.samplesTarget());

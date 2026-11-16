@@ -314,6 +314,10 @@ void App::drawMenuBar() {
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Save Rendered Image...", nullptr, false, !renderImg_.empty())) openFileDialog(FileDialogMode::SaveImage);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Sequence Player")) { showSequencePlayer = true; ImGui::SetWindowFocus("Sequence Player"); }
+        if (ImGui::MenuItem("Open Sequence in Player...")) openFileDialog(FileDialogMode::OpenSequence);
+        if (ImGui::MenuItem("Play Last Rendered Sequence", nullptr, false, !player.lastRendered.empty())) openSequence(player.lastRendered);
         if (ImGui::MenuItem("Render Settings...")) showRenderSettings = true;
         ImGui::Separator();
         unavailable("Create Render Node");
@@ -347,6 +351,7 @@ void App::drawMenuBar() {
         ImGui::MenuItem("Shelf", nullptr, &showShelf);
         ImGui::MenuItem("Scene View", nullptr, &showSceneView);
         ImGui::MenuItem("Render View", nullptr, &showRenderView);
+        ImGui::MenuItem("Sequence Player", nullptr, &showSequencePlayer);
         ImGui::MenuItem("Network View", nullptr, &showNetwork);
         ImGui::MenuItem("Parameters", nullptr, &showParms);
         ImGui::MenuItem("Geometry Spreadsheet", nullptr, &showSpreadsheet);

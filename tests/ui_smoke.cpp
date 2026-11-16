@@ -4,6 +4,7 @@
 // Writes a screenshot per example (PPM) so the UI can be inspected.
 //   hd_ui_smoke <examples_dir> <out_dir> [render_samples]
 #include "app/App.h"
+#include "core/Image.h"
 #include "core/Python.h"
 #include "core/Demo.h"
 #include "render/GL.h"
@@ -211,6 +212,54 @@ int main(int argc, char** argv) {
         app.setViewportView(hd::Camera::Persp);
         if (app.camera.ortho()) { std::printf("FAIL back to perspective\n"); ++failures; }
         for (int i = 0; i < 3; ++i) runFrame();
+    }
+    // Sequence Player: open a numbered sequence, it plays and loops; stepping and the channel view work
+    {
+        namespace fs = std::filesystem;
+        fs::path dir = fs::temp_directory_path() / "hd_player_smoke";
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        const int w = 320, h = 180, frames = 12;
+        for (int f = 1; f <= frames; ++f) {
+            std::vector<uint8_t> px(size_t(w) * h * 4, 255);
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    uint8_t* p = &px[(size_t(y) * w + size_t(x)) * 4];
+                    bool ball = (x - 20 - f * 22) * (x - 20 - f * 22) + (y - 90) * (y - 90) < 400; // a dot moving right
+                    p[0] = ball ? 250 : uint8_t(30 + y / 3); p[1] = ball ? 180 : 40; p[2] = ball ? 60 : uint8_t(70 + x / 5);
+                }
+            char name[64];
+            std::snprintf(name, sizeof name, "anim.%04d.png", f);
+            hd::writePng8((dir / name).string(), px, w, h, 4);
+        }
+        if (!app.openSequence((dir / "anim.0005.png").string())) { std::printf("FAIL openSequence\n"); ++failures; }
+        else {
+            app.player.fps = 120;
+            int seen = 0, last = app.player.index;
+            bool wrapped = false;
+            for (int i = 0; i < 400 && !(wrapped && seen > frames); ++i) {
+                runFrame();
+                if (app.player.index != last) { ++seen; if (app.player.index < last) wrapped = true; last = app.player.index; }
+            }
+            if (!wrapped || seen < frames) { std::printf("FAIL sequence playback: %d frame changes, wrapped %d\n", seen, int(wrapped)); ++failures; }
+            app.player.playing = false;
+            app.player.index = 4;
+            for (int i = 0; i < 4; ++i) runFrame();
+            save("sequence_player");
+            app.playerStep(-5);
+            if (app.player.index != frames - 1) { std::printf("FAIL playerStep wrap (%d)\n", app.player.index); ++failures; }
+            app.player.loop = 1; app.player.index = frames - 2; app.player.playing = true;
+            for (int i = 0; i < 60 && app.player.playing; ++i) runFrame();
+            if (app.player.playing || app.player.index != frames - 1) { std::printf("FAIL play once\n"); ++failures; }
+            app.player.channel = 4;
+            runFrame(); runFrame();
+            app.player.channel = 0;
+            app.player.loop = 0;
+        }
+        if (app.openSequence((dir / "missing.0001.png").string())) { std::printf("FAIL opening a missing sequence\n"); ++failures; }
+        app.showSequencePlayer = false;
+        runFrame();
+        fs::remove_all(dir);
     }
     // an empty scene: what you see when you start modelling (the reference grid on its own)
     app.newScene(false);

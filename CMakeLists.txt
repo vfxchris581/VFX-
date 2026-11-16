@@ -37,6 +37,7 @@ add_library(hd_core STATIC
   src/core/Shading.cpp
   src/core/Shader.cpp
   src/core/Boolean.cpp
+  src/core/ImageSequence.cpp
   src/core/Usd.cpp
   src/core/Python.cpp
   src/core/Version.cpp
@@ -155,6 +156,7 @@ if(HD_BUILD_APP)
     src/app/Menus.cpp
     src/app/Panels.cpp
     src/app/RenderView.cpp
+    src/app/SequencePlayer.cpp
     src/app/PythonShell.cpp
     src/app/Shelf.cpp
     src/app/Theme.cpp

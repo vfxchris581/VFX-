@@ -14,6 +14,7 @@
 #include "core/Ops.h"
 #include "core/PathTracer.h"
 #include "core/Shader.h"
+#include "core/ImageSequence.h"
 #include "core/Volume.h"
 #include <chrono>
 #include <cstdio>
@@ -3357,6 +3358,95 @@ TEST(clip) {
     setP(c, "dir", Vec3(0));
     g.cook(c);
     CHECK(!c->error().empty());
+}
+
+TEST(image_sequence) {
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "hd_seq_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    // frames 1, 2, 4, 5 (3 missing), each a flat grey of 10 x frame; plus files that are not part of it
+    const int w = 32, h = 18;
+    for (int f : {1, 2, 4, 5}) {
+        std::vector<uint8_t> px(size_t(w) * h * 4, 255);
+        for (size_t i = 0; i < px.size(); i += 4) px[i] = px[i + 1] = px[i + 2] = uint8_t(10 * f);
+        char name[64];
+        std::snprintf(name, sizeof name, "shot.%04d.png", f);
+        CHECK(writePng8((dir / name).string(), px, w, h, 4));
+    }
+    {
+        std::vector<uint8_t> px(16 * 4, 0);
+        CHECK(writePng8((dir / "shot_v2.0001.png").string(), px, 4, 4, 4));
+        CHECK(writePng8((dir / "shot.0001.exr.png").string(), px, 4, 4, 4));
+        CHECK(writePng8((dir / "still.png").string(), px, 4, 4, 4));
+        std::FILE* bad = std::fopen((dir / "broken.0001.png").string().c_str(), "wb");
+        std::fputs("not a png", bad);
+        std::fclose(bad);
+    }
+    SequenceInfo seq;
+    std::string err;
+    CHECK(findSequence((dir / "shot.0004.png").string(), seq, err));
+    CHECK(seq.size() == 4 && seq.frames == std::vector<int>({1, 2, 4, 5}) && seq.label == "shot.####.png" && !seq.linear);
+    CHECK(seq.size() == 4 && fs::path(seq.files[2]).filename() == "shot.0004.png");
+    // a file without a frame number is a one-frame sequence; non-images and missing files are refused
+    CHECK(findSequence((dir / "still.png").string(), seq, err) && seq.size() == 1);
+    CHECK(!findSequence((dir / "nothing.0001.png").string(), seq, err) && !err.empty());
+    CHECK(findSequence((dir / "shot.0001.png").string(), seq, err));
+
+    // loading: right pixels, in order around the playhead, within the budget
+    {
+        SequenceCache cache(2);
+        cache.open(seq, size_t(64) << 20);
+        for (int i = 0; i < 4; ++i) CHECK(cache.waitFor(i, 5000));
+        auto f = cache.frame(2);
+        CHECK(f && f->w == w && f->h == h && f->rgba[0] == 40 && f->rgba[3] == 255);
+        // a budget of two frames keeps the playhead's frame and the next one
+        cache.open(seq, size_t(w) * h * 4 * 2 + 200);
+        cache.setPlayhead(2, 1);
+        CHECK(cache.waitFor(2, 5000) && cache.waitFor(3, 5000));
+        CHECK(cache.bytes() <= cache.budget());
+        cache.setPlayhead(3, 1); // moves on: frame 0 (wrapping) becomes wanted, frame 2 is dropped
+        CHECK(cache.waitFor(0, 5000));
+        CHECK(cache.loaded(3) && cache.loaded(0) && !cache.loaded(2) && cache.bytes() <= cache.budget());
+        // backward playback loads behind
+        cache.setPlayhead(1, -1);
+        CHECK(cache.waitFor(1, 5000) && cache.loaded(0));
+    }
+    // an unreadable frame comes back with an error instead of stalling playback
+    {
+        SequenceInfo bad;
+        CHECK(findSequence((dir / "broken.0001.png").string(), bad, err));
+        SequenceCache cache(1);
+        cache.open(bad, size_t(1) << 20);
+        CHECK(cache.waitFor(0, 5000));
+        auto f = cache.frame(0);
+        CHECK(f && f->w == 0 && !f->error.empty());
+    }
+    // linear frames: exposure and the sRGB curve
+    {
+        Image img;
+        img.w = 2; img.h = 1; img.c = 3;
+        img.px = {0.18f, 0.18f, 0.18f, 1, 0.5f, 0};
+        SequenceCache::Frame fr;
+        SequenceCache::toDisplay(img, true, 0, fr);
+        CHECK(fr.rgba[0] >= 117 && fr.rgba[0] <= 119 && fr.rgba[4] == 255 && fr.rgba[6] == 0 && fr.rgba[3] == 255);
+        SequenceCache::toDisplay(img, true, 1, fr); // +1 stop: 0.36
+        CHECK(fr.rgba[0] >= 160 && fr.rgba[0] <= 163);
+        SequenceCache::toDisplay(img, false, 3, fr); // 8-bit: as stored
+        CHECK(fr.rgba[0] == 46);
+    }
+    // EXR sequences are linear
+    {
+        std::vector<float> r(4, 0.5f);
+        CHECK(writeExr((dir / "beauty.0010.exr").string(), 2, 2, {{"R", r.data()}, {"G", r.data()}, {"B", r.data()}}, true));
+        CHECK(findSequence((dir / "beauty.0010.exr").string(), seq, err) && seq.linear && seq.frames == std::vector<int>({10}));
+        SequenceCache cache(1);
+        cache.open(seq, size_t(1) << 20);
+        CHECK(cache.waitFor(0, 5000) && cache.frame(0)->rgba[0] >= 187 && cache.frame(0)->rgba[0] <= 189);
+        cache.setExposure(-1); // reloads at 0.25
+        CHECK(cache.waitFor(0, 5000) && cache.frame(0)->rgba[0] >= 136 && cache.frame(0)->rgba[0] <= 138);
+    }
+    fs::remove_all(dir);
 }
 
 int main() {

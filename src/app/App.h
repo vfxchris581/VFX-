@@ -2,7 +2,9 @@
 #include "core/Lights.h"
 #include "core/Node.h"
 #include "core/PathTracer.h"
+#include "core/ImageSequence.h"
 #include "render/Renderer.h"
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -48,7 +50,7 @@ private:
     void drawNodeMenu(App& app);
 };
 
-enum class FileDialogMode { None, Open, SaveAs, ImportObj, ExportObj, ChooseFileParm, SaveImage, SaveSequence, MergeScene, InstallAsset, ExportUsd, RunPython };
+enum class FileDialogMode { None, Open, SaveAs, ImportObj, ExportObj, ChooseFileParm, SaveImage, SaveSequence, MergeScene, InstallAsset, ExportUsd, RunPython, OpenSequence };
 
 class App {
 public:
@@ -76,6 +78,35 @@ public:
     Graph& viewNet();
     // Perspective or an orthographic axis view in the viewport (leaves a camera node's view).
     void setViewportView(int view);
+    // ---- Sequence Player (SequencePlayer.cpp): plays rendered image sequences, like Houdini's MPlay
+    bool openSequence(const std::string& anyFrame, bool focus = true); // any frame of a PNG / EXR / HDR sequence
+    void drawSequencePlayer();
+    void playerStep(int frames); // moves the playhead, following the loop mode
+    bool showSequencePlayer = false;
+    struct Player {
+        int index = 0;          // into the sequence's frames
+        bool playing = false;
+        int dir = 1;            // playing forward (+1) or backward (-1)
+        float fps = 24;
+        int loop = 0;           // 0 loop, 1 play once, 2 ping-pong
+        int channel = 0;        // 0 RGB, 1 R, 2 G, 3 B, 4 alpha, 5 luminance
+        float exposure = 0;     // stops, for EXR / HDR
+        float zoom = 0;         // 0 = fit to the panel, else image pixels per screen pixel
+        float panX = 0, panY = 0;
+        double accum = 0;       // fractional frames waiting to be played
+        bool buffering = false; // playing but the next frame isn't loaded yet
+        float realFps = 0;
+        double fpsClock = 0;
+        int fpsFrames = 0;
+        unsigned tex = 0;
+        int texW = 0, texH = 0;
+        const void* texFrame = nullptr; // frame data the texture holds
+        int texChannel = -1;
+        std::string lastRendered; // a frame of the last finished Render Sequence
+        std::string error;
+        bool focusNext = false;
+    } player;
+    std::unique_ptr<SequenceCache> seqCache_;
     Node* current() { return net().findNode(currentId); }
     const std::vector<std::string>& netPath() const { return netPath_; }
     void diveInto(Node* subnetNode);

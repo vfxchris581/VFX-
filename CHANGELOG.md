@@ -7,6 +7,13 @@ what works, what is partial and what is planned.
 
 Phases 8 to 13: installers and releases, packed primitives and instancing, rigid-body constraints, Python scripting, node-based shaders, modelling tools, plus new simulation and viewport features.
 
+### Sequence Player
+
+- A Sequence Player tab next to the Render View plays rendered image sequences inside the app, like Houdini's MPlay. Open it with Render > Sequence Player, the Render View's "Play Sequence..." button, or by dropping an image onto the window; pick any frame and it finds the rest (`name.0001.png`, `.exr`, `.hdr`, gaps allowed).
+- Play forward or backward at any frame rate, loop, play once or ping-pong, step frame by frame, scrub, jump to a frame. Frames load in the background ahead of the playhead (up to 1.5 GB), and playback waits for frames still loading instead of skipping them; the scrub bar shows what is loaded.
+- Zoom and pan (wheel, drag, double-click to fit, 1:1), view one channel or alpha, exposure for EXR / HDR, the pixel value under the mouse. Keys: Space play/pause, arrows step, Home/End, F fit.
+- A finished Render Sequence is loaded into the player automatically.
+
 ### Modelling tools (Phase 13)
 
 - Boolean node: union, intersect, subtract and shatter of closed meshes. Faces lying in the same plane are handled, attributes carry over (colours, uvs, materials), uncut polygons stay whole, and the result is welded with no T-junction cracks. About 0.6 s for an 80,000-polygon sphere against a 20,000-polygon torus.
