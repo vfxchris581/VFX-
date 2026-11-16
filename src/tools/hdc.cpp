@@ -6,6 +6,13 @@
 #include "core/Compositing.h"
 #include "core/PathTracer.h"
 #include "core/Usd.h"
+#include "core/ImageSequence.h"
+#include "core/Video.h"
+#include "core/Image.h"
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <memory>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -26,7 +33,9 @@ static void usage() {
         "  hdc frames <scene.hdg> <out_$F.obj> <start> <end> [--node NAME]   export a sequence\n"
         "  hdc render <scene.hdg> <out.png|out.exr> [--frame N | --frames A B] [--samples N] [--size W H] [--node NAME] [--camera NAME]\n"
         "             [--denoise | --no-denoise] [--motionblur]   (.exr writes RGBA plus albedo, N and Z passes)\n"
-        "             path-trace the scene (a sequence writes out.0001.png, out.0002.png, ...)\n"
+        "             path-trace the scene (a sequence writes out.0001.png, out.0002.png, ...; out.mp4 / out.mov makes a movie)\n"
+        "  hdc movie  <any frame of a sequence> <out.mp4|out.mov> [--fps N] [--quality high|medium|small] [--qp N] [--keyint N]\n"
+        "             make an H.264 movie from rendered frames (name.0001.png, .exr or .hdr)\n"
         "  hdc usd    <scene.hdg> <out.usda> [--node NAME] [--frame N | --frames A B]\n"
         "             export to USD (mesh, materials, cameras, lights; animated over a frame range)\n"
         "  hdc image  <scene.hdg> <out.png|out.exr> [--node NAME] [--frame N | --frames A B]\n"
@@ -44,6 +53,29 @@ static void usage() {
 static const char* opt(int argc, char** argv, const char* name) {
     for (int i = 1; i + 1 < argc; ++i) if (!std::strcmp(argv[i], name)) return argv[i + 1];
     return nullptr;
+}
+
+static bool isMoviePath(const std::string& p) {
+    std::string e = std::filesystem::path(p).extension().string();
+    for (auto& c : e) c = char(std::tolower((unsigned char)c));
+    return e == ".mp4" || e == ".mov";
+}
+
+// --fps, --quality, --qp, --keyint
+static bool parseMovieOptions(int argc, char** argv, MovieOptions& mo, std::string& err) {
+    if (const char* v = opt(argc, argv, "--fps")) mo.fps = float(std::atof(v));
+    if (const char* v = opt(argc, argv, "--quality")) {
+        std::string q = v;
+        if (q == "high") mo.qp = movieQpForQuality(0);
+        else if (q == "medium") mo.qp = movieQpForQuality(1);
+        else if (q == "small") mo.qp = movieQpForQuality(2);
+        else { err = "--quality is high, medium or small"; return false; }
+    }
+    if (const char* v = opt(argc, argv, "--qp")) mo.qp = std::atoi(v);
+    if (const char* v = opt(argc, argv, "--keyint")) mo.keyint = std::atoi(v);
+    if (mo.fps <= 0 || mo.fps > 240) { err = "--fps must be between 0 and 240"; return false; }
+    if (mo.qp < 0 || mo.qp > 51) { err = "--qp must be 0 to 51"; return false; }
+    return true;
 }
 
 static bool exportGeo(const std::string& path, const Geometry& g, std::string& err) {
@@ -234,6 +266,44 @@ int main(int argc, char** argv) {
         std::printf("wrote %s\n", argv[3]);
         return 0;
     }
+    if (cmd == "movie" && argc >= 4) {
+        SequenceInfo seq;
+        std::string err;
+        if (!findSequence(argv[2], seq, err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+        MovieOptions mo;
+        if (!parseMovieOptions(argc, argv, mo, err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+        if (!opt(argc, argv, "--fps")) mo.fps = 24;
+        if (const char* sl = opt(argc, argv, "--slices")) mo.slices = std::atoi(sl);
+        if (const char* rp = opt(argc, argv, "--recon")) {
+            // testing: also write the encoder's pictures (raw YUV 4:2:0) to compare with a decoder's output
+            std::FILE* rf = std::fopen(rp, "wb");
+            if (!rf) { std::printf("error: cannot write %s\n", rp); return 1; }
+            MovieWriter mw;
+            for (size_t i = 0; i < seq.size(); ++i) {
+                Image img;
+                if (!readImage(seq.files[i], img, false, &err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+                SequenceCache::Frame fr;
+                SequenceCache::toDisplay(img, seq.linear, 0, fr);
+                if ((i == 0 && !mw.open(argv[3], img.w, img.h, mo, err)) || !mw.addFrame(fr.rgba.data(), err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+                std::fwrite(mw.lastReconstruction().data(), 1, mw.lastReconstruction().size(), rf);
+            }
+            std::fclose(rf);
+            if (!mw.finish(err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+            std::printf("%s: %d frames %dx%d, reconstruction in %s\n", argv[3], mw.frames(), mw.width(), mw.height(), rp);
+            return 0;
+        }
+        auto t0 = std::chrono::steady_clock::now();
+        bool ok = writeMovie(seq, argv[3], mo, [&](int done, int total) {
+            if (done == total || done % 10 == 0) { std::printf("\rframe %d / %d", done, total); std::fflush(stdout); }
+            return true;
+        }, err);
+        std::printf("\n");
+        if (!ok) { std::printf("error: %s\n", err.c_str()); return 1; }
+        double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::error_code ec;
+        std::printf("%s: %zu frames (%s), %.1f MB, %.1fs\n", argv[3], seq.size(), seq.label.c_str(), double(std::filesystem::file_size(argv[3], ec)) / 1048576.0, secs);
+        return 0;
+    }
     if (cmd == "render" && argc >= 4) {
         Graph g;
         std::string err;
@@ -258,6 +328,15 @@ int main(int argc, char** argv) {
         for (int i = 1; i + 2 < argc; ++i)
             if (!std::strcmp(argv[i], "--frames")) { a = std::atoi(argv[i + 1]); b = std::atoi(argv[i + 2]); seq = true; }
         PathTracer pt;
+        // out.mp4 / out.mov: frames go straight into a movie
+        std::unique_ptr<MovieWriter> movie;
+        if (isMoviePath(argv[3])) {
+            movie = std::make_unique<MovieWriter>();
+            seq = false;
+        }
+        MovieOptions mo;
+        mo.fps = g.fps > 0 ? g.fps : 24;
+        if (movie && !parseMovieOptions(argc, argv, mo, err)) { std::printf("error: %s\n", err.c_str()); return 1; }
         for (int f = a; f <= b; ++f) {
             g.frame = float(f);
             g.cook(target);
@@ -297,12 +376,22 @@ int main(int argc, char** argv) {
                 path.insert(dot == std::string::npos ? path.size() : dot, num);
             }
             for (const std::string& wl : {pt.warnings()}) if (!wl.empty()) std::printf("warning: %s", wl.c_str());
+            if (movie) {
+                if (f == a && !movie->open(argv[3], w, h, mo, err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+                if (!movie->addFrame(img.data(), err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+                std::printf("frame %d -> %s (%dx%d, %d samples, %.1fs)\n", f, argv[3], w, h, pt.samplesDone(), pt.secondsElapsed());
+                continue;
+            }
             bool exr = path.size() > 4 && (path.substr(path.size() - 4) == ".exr" || path.substr(path.size() - 4) == ".EXR");
             if (exr) {
                 PathTracer::Buffers buf;
                 if (!pt.fetchBuffers(buf) || !writeExrPasses(path, buf, true, &err)) { std::printf("%s\n", err.c_str()); return 1; }
             } else if (!writePng(path, img, w, h, &err)) { std::printf("%s\n", err.c_str()); return 1; }
             std::printf("frame %d -> %s (%dx%d, %d samples, %.1fs)\n", f, path.c_str(), w, h, pt.samplesDone(), pt.secondsElapsed());
+        }
+        if (movie) {
+            if (!movie->finish(err)) { std::printf("error: %s\n", err.c_str()); return 1; }
+            std::printf("%s: %d frames, %.1f MB\n", argv[3], movie->frames(), double(movie->bytes()) / 1048576.0);
         }
         return 0;
     }

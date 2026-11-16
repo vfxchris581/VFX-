@@ -310,7 +310,7 @@ void App::drawMenuBar() {
         if (ImGui::MenuItem("Render Sequence...", nullptr, false, !busy)) { showRenderView = true; ImGui::SetWindowFocus("Render View"); openFileDialog(FileDialogMode::SaveSequence); }
         if (ImGui::MenuItem("Stop Render", nullptr, false, busy)) {
             tracer_.stop();
-            if (seqActive_) { seqActive_ = false; status("Sequence stopped after " + std::to_string(seqCount_) + " frames"); }
+            if (seqActive_) endSequence(true);
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Save Rendered Image...", nullptr, false, !renderImg_.empty())) openFileDialog(FileDialogMode::SaveImage);
@@ -318,6 +318,7 @@ void App::drawMenuBar() {
         if (ImGui::MenuItem("Sequence Player")) { showSequencePlayer = true; ImGui::SetWindowFocus("Sequence Player"); }
         if (ImGui::MenuItem("Open Sequence in Player...")) openFileDialog(FileDialogMode::OpenSequence);
         if (ImGui::MenuItem("Play Last Rendered Sequence", nullptr, false, !player.lastRendered.empty())) openSequence(player.lastRendered);
+        if (ImGui::MenuItem("Save Sequence as Movie...", nullptr, false, seqCache_ && seqCache_->sequence().size() > 0 && !movieJob_)) openFileDialog(FileDialogMode::SaveMovie);
         if (ImGui::MenuItem("Render Settings...")) showRenderSettings = true;
         ImGui::Separator();
         unavailable("Create Render Node");

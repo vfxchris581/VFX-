@@ -42,6 +42,8 @@ bool App::init(GLFWwindow* window, const std::string& startupFile) {
 
 void App::shutdown() {
     savePrefs();
+    movieJob_.reset(); // cancels and waits for a movie export
+    if (seqActive_) endSequence(true);
     tracer_.stop();
     renderer.shutdown();
 }
@@ -480,6 +482,7 @@ void App::frame() {
     stepSequence();
     if (showRenderView) drawRenderView();
     if (showSequencePlayer) drawSequencePlayer();
+    pollMovieJob();
     drawDisplayOptions();
     drawRenderSettings();
     drawAssetManager();
@@ -545,6 +548,14 @@ void App::openFileDialog(FileDialogMode mode) {
     } else if (mode == FileDialogMode::SaveImage || mode == FileDialogMode::SaveSequence) {
         std::string stem = currentFile_.empty() ? "render" : fs::path(currentFile_).stem().string();
         std::snprintf(fileName_, sizeof fileName_, "%s.png", stem.c_str());
+    } else if (mode == FileDialogMode::SaveMovie && seqCache_ && seqCache_->sequence().size()) {
+        // next to the frames, named after them: shot.####.png -> shot.mp4
+        const SequenceInfo& sq = seqCache_->sequence();
+        std::string stem = sq.label.substr(0, sq.label.find('#'));
+        while (!stem.empty() && (stem.back() == '.' || stem.back() == '_' || stem.back() == '-')) stem.pop_back();
+        if (stem.empty()) stem = fs::path(sq.files[0]).stem().string();
+        std::snprintf(fileName_, sizeof fileName_, "%s.mp4", stem.c_str());
+        fileDir_ = fs::path(sq.files[0]).parent_path().string();
     } else if (mode == FileDialogMode::ExportUsd) {
         std::string stem = currentFile_.empty() ? "scene" : fs::path(currentFile_).stem().string();
         std::snprintf(fileName_, sizeof fileName_, "%s.usda", stem.c_str());
@@ -554,6 +565,29 @@ void App::openFileDialog(FileDialogMode mode) {
     if (fileDir_.empty() || !fs::exists(fileDir_)) fileDir_ = fs::current_path().string();
 }
 
+void App::startRenderSequence(const std::string& path) {
+    seqBase_ = path;
+    seqMovie_.reset();
+    seqMoviePath_.clear();
+    if (std::string e = fs::path(path).extension().string(); e == ".mp4" || e == ".mov" || e == ".MP4" || e == ".MOV") {
+        // frames go to name_frames/name.0001.png (for the Sequence Player), and into the movie
+        fs::path p(path);
+        fs::path dir = p.parent_path() / (p.stem().string() + "_frames");
+        std::error_code mkErr;
+        fs::create_directories(dir, mkErr);
+        if (mkErr) { status("Could not create " + dir.string() + ": " + mkErr.message(), true); return; }
+        seqMoviePath_ = path;
+        seqMovie_ = std::make_unique<MovieWriter>();
+        seqBase_ = (dir / (p.stem().string() + ".png")).string();
+    }
+    seqFrame_ = graph.frameStart;
+    seqEnd_ = graph.frameEnd;
+    seqCount_ = 0;
+    seqActive_ = true;
+    seqWaiting_ = false;
+    playing = false;
+}
+
 void App::drawFileDialog() {
     if (fileDialogOpenRequest_) {
         ImGui::OpenPopup("File Browser");
@@ -561,14 +595,16 @@ void App::drawFileDialog() {
     }
     ImGui::SetNextWindowSize(ImVec2(640, 460), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal("File Browser", nullptr)) return;
-    const char* titles[] = {"", "Open Scene", "Save Scene As", "Import OBJ", "Export Geometry (.obj / .ply)", "Choose File", "Save Rendered Image", "Render Sequence To (frame numbers are added)", "Merge Scene", "Install Asset", "Export USD", "Run Python Script", "Open Image Sequence (pick any frame)"};
+    const char* titles[] = {"", "Open Scene", "Save Scene As", "Import OBJ", "Export Geometry (.obj / .ply)", "Choose File", "Save Rendered Image", "Render Sequence To (.png / .exr frames, or an .mp4 / .mov movie)", "Merge Scene", "Install Asset", "Export USD", "Run Python Script", "Open Image Sequence (pick any frame)", "Save Movie (.mp4 or .mov)"};
     ImGui::TextUnformatted(titles[int(fileMode_)]);
     ImGui::Separator();
-    bool saving = fileMode_ == FileDialogMode::SaveAs || fileMode_ == FileDialogMode::ExportObj || fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence || fileMode_ == FileDialogMode::ExportUsd;
+    bool saving = fileMode_ == FileDialogMode::SaveAs || fileMode_ == FileDialogMode::ExportObj || fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence || fileMode_ == FileDialogMode::ExportUsd || fileMode_ == FileDialogMode::SaveMovie;
     std::vector<std::string> exts;
     if (fileMode_ == FileDialogMode::Open || fileMode_ == FileDialogMode::SaveAs || fileMode_ == FileDialogMode::MergeScene) exts = {".hdg"};
     else if (fileMode_ == FileDialogMode::ExportObj) exts = {".obj", ".ply"};
-    else if (fileMode_ == FileDialogMode::SaveImage || fileMode_ == FileDialogMode::SaveSequence) exts = {".png", ".exr"};
+    else if (fileMode_ == FileDialogMode::SaveImage) exts = {".png", ".exr"};
+    else if (fileMode_ == FileDialogMode::SaveSequence) exts = {".png", ".exr", ".mp4", ".mov"};
+    else if (fileMode_ == FileDialogMode::SaveMovie) exts = {".mp4", ".mov"};
     else if (fileMode_ == FileDialogMode::InstallAsset) exts = {".hda"};
     else if (fileMode_ == FileDialogMode::ExportUsd) exts = {".usda"};
     else if (fileMode_ == FileDialogMode::ImportObj) exts = {".obj", ".usda"};
@@ -637,6 +673,19 @@ void App::drawFileDialog() {
     if (ec) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", ec.message().c_str());
     ImGui::EndChild();
 
+    // movie quality, for files that become movies
+    const std::string chosenExt = [&] { std::string e = fs::path(fileName_).extension().string(); std::transform(e.begin(), e.end(), e.begin(), ::tolower); return e; }();
+    if (fileMode_ == FileDialogMode::SaveMovie || (fileMode_ == FileDialogMode::SaveSequence && (chosenExt == ".mp4" || chosenExt == ".mov"))) {
+        static const char* q[] = {"High (bigger file)", "Medium", "Small (smaller file)"};
+        ImGui::TextUnformatted("H.264 quality");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(170);
+        ImGui::Combo("##moviequality", &movieQuality, q, 3);
+        ImGui::SameLine();
+        ImGui::TextDisabled(fileMode_ == FileDialogMode::SaveSequence ? "frames are kept as PNGs in a _frames folder next to the movie" : ".mp4 or .mov (QuickTime)");
+    } else if (fileMode_ == FileDialogMode::SaveSequence) {
+        ImGui::TextDisabled("Name it .png or .exr for numbered frames, or .mp4 / .mov for a movie.");
+    }
     ImGui::SetNextItemWidth(-220);
     bool enter = ImGui::InputText("##name", fileName_, sizeof fileName_, ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
@@ -728,15 +777,8 @@ void App::drawFileDialog() {
             status(ok ? "Saved " + chosen : "Save failed: " + err, !ok);
             break;
         }
-        case FileDialogMode::SaveSequence:
-            seqBase_ = chosen;
-            seqFrame_ = graph.frameStart;
-            seqEnd_ = graph.frameEnd;
-            seqCount_ = 0;
-            seqActive_ = true;
-            seqWaiting_ = false;
-            playing = false;
-            break;
+        case FileDialogMode::SaveMovie: startMovieExport(chosen); break;
+        case FileDialogMode::SaveSequence: startRenderSequence(chosen); break;
         default: break;
         }
         fileDir_ = fs::path(chosen).parent_path().string();

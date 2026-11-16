@@ -256,6 +256,35 @@ int main(int argc, char** argv) {
             app.player.channel = 0;
             app.player.loop = 0;
         }
+        // Save Movie: the export runs in the background while the app keeps drawing
+        if (app.seqCache_ && app.seqCache_->sequence().size()) {
+            app.openSequence((dir / "anim.0001.png").string(), false);
+            app.player.fps = 24;
+            app.startMovieExport((dir / "anim.mp4").string());
+            for (int i = 0; i < 600 && app.movieJob_; ++i) { runFrame(); std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+            std::error_code ec;
+            if (app.movieJob_ || !fs::exists(dir / "anim.mp4") || fs::file_size(dir / "anim.mp4", ec) < 1000) { std::printf("FAIL Save Movie\n"); ++failures; }
+            // cancelling removes the partial file
+            app.startMovieExport((dir / "cancelled.mov").string());
+            if (app.movieJob_) app.movieJob_->cancel = true;
+            for (int i = 0; i < 600 && app.movieJob_; ++i) runFrame();
+            if (fs::exists(dir / "cancelled.mov")) { std::printf("FAIL cancelled movie left a file\n"); ++failures; }
+        }
+        // Render Sequence straight to a movie: frames in a _frames folder, the movie, and the player loads the frames
+        {
+            app.graph.frameStart = 1; app.graph.frameEnd = 3;
+            hd::RenderSettings keep = app.graph.render;
+            app.graph.render.width = 96; app.graph.render.height = 54; app.graph.render.samples = 1; app.graph.render.denoise = false;
+            app.graph.render.cameraName.clear();
+            app.startRenderSequence((dir / "shot.mov").string());
+            for (int i = 0; i < 3000 && app.renderingSequence(); ++i) runFrame();
+            std::error_code ec;
+            bool ok = !app.renderingSequence() && fs::exists(dir / "shot.mov") && fs::exists(dir / "shot_frames" / "shot.0003.png") &&
+                      app.seqCache_ && app.seqCache_->sequence().size() == 3;
+            if (!ok) { std::printf("FAIL Render Sequence to .mov\n"); ++failures; }
+            app.graph.render = keep;
+            save("render_sequence_movie");
+        }
         if (app.openSequence((dir / "missing.0001.png").string())) { std::printf("FAIL opening a missing sequence\n"); ++failures; }
         app.showSequencePlayer = false;
         runFrame();

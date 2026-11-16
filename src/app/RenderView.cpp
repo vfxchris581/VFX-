@@ -49,26 +49,47 @@ void App::stepSequence() {
             bool exr = path.size() > 4 && path.compare(path.size() - 4, 4, ".exr") == 0;
             PathTracer::Buffers buf;
             bool ok = exr ? (tracer_.fetchBuffers(buf) && writeExrPasses(path, buf, true, &err)) : writePng(path, img, w, h, &err);
-            if (!ok) { status("Sequence stopped: " + err, true); seqActive_ = false; }
+            if (ok && seqMovie_) {
+                MovieOptions mo;
+                mo.fps = graph.fps > 0 ? graph.fps : 24;
+                mo.qp = movieQpForQuality(movieQuality);
+                if (seqCount_ == 0 && !seqMovie_->open(seqMoviePath_, w, h, mo, err)) ok = false;
+                else if (!seqMovie_->addFrame(img.data(), err)) ok = false;
+            }
+            if (!ok) { status("Sequence stopped: " + err, true); endSequence(true); }
             else { ++seqCount_; status("Saved " + path); player.lastRendered = path; }
             seqWaiting_ = false;
             ++seqFrame_;
         }
         if (seqActive_) {
             if (seqFrame_ > seqEnd_) {
-                seqActive_ = false;
-                status("Sequence finished: " + std::to_string(seqCount_) + " frames. Play it in the Sequence Player.");
+                endSequence(false);
                 // ready to play: loaded into the Sequence Player (without taking the focus)
                 if (!player.lastRendered.empty()) openSequence(player.lastRendered, false);
             } else {
                 graph.frame = float(seqFrame_);
                 startRender();
                 seqWaiting_ = tracer_.running();
-                if (!seqWaiting_) seqActive_ = false;
+                if (!seqWaiting_) endSequence(true);
             }
         }
     }
 
+}
+
+void App::endSequence(bool stopped) {
+    if (!seqActive_ && !seqMovie_) return;
+    seqActive_ = false;
+    std::string msg = stopped ? "Sequence stopped after " + std::to_string(seqCount_) + " frames" : "Sequence finished: " + std::to_string(seqCount_) + " frames";
+    bool err = false;
+    if (seqMovie_) {
+        std::string e;
+        if (seqMovie_->frames() > 0 && seqMovie_->finish(e)) msg += ". Movie: " + seqMoviePath_;
+        else if (seqMovie_->frames() > 0) { msg += ". Movie failed: " + e; err = true; }
+        seqMovie_.reset(); // an unfinished movie file is removed
+    }
+    if (!stopped && !err) msg += ". Play it in the Sequence Player.";
+    status(msg, err);
 }
 
 void App::drawRenderSettings() {
@@ -124,7 +145,7 @@ void App::drawRenderView() {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Path-trace the displayed node from the Scene View camera");
     } else if (ImGui::Button(seqActive_ ? "Stop Sequence" : "Stop")) {
         tracer_.stop();
-        if (seqActive_) { seqActive_ = false; status("Sequence stopped after " + std::to_string(seqCount_) + " frames"); }
+        if (seqActive_) endSequence(true);
     }
     ImGui::SameLine();
     static const int sizes[][2] = {{640, 360}, {960, 540}, {1280, 720}, {1920, 1080}, {1080, 1080}, {1080, 1920}};
@@ -154,7 +175,7 @@ void App::drawRenderView() {
     if (ImGui::Button("Save Image...") && !renderImg_.empty()) openFileDialog(FileDialogMode::SaveImage);
     ImGui::SameLine();
     if (ImGui::Button("Render Sequence...")) openFileDialog(FileDialogMode::SaveSequence);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render frames %d-%d (the timeline range) to numbered PNG or EXR files", graph.frameStart, graph.frameEnd);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Render frames %d-%d (the timeline range) to numbered PNG or EXR files, or to an MP4 / MOV movie", graph.frameStart, graph.frameEnd);
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button("Play Sequence...")) {

@@ -38,6 +38,7 @@ add_library(hd_core STATIC
   src/core/Shader.cpp
   src/core/Boolean.cpp
   src/core/ImageSequence.cpp
+  src/core/Video.cpp
   src/core/Usd.cpp
   src/core/Python.cpp
   src/core/Version.cpp

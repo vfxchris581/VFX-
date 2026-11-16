@@ -14,6 +14,12 @@ Phases 8 to 13: installers and releases, packed primitives and instancing, rigid
 - Zoom and pan (wheel, drag, double-click to fit, 1:1), view one channel or alpha, exposure for EXR / HDR, the pixel value under the mouse. Keys: Space play/pause, arrows step, Home/End, F fit.
 - A finished Render Sequence is loaded into the player automatically.
 
+### Movies (MP4 and MOV)
+
+- Save a sequence as an H.264 movie in `.mp4` or QuickTime `.mov`: "Save Movie..." in the Sequence Player (runs in the background, with progress and Cancel), or name the Render Sequence output `.mp4` / `.mov` to render straight to a movie (the frames are also kept as PNGs in a `_frames` folder so the Sequence Player can play them). Quality: High, Medium or Small.
+- `hdc movie <frame> out.mp4 [--fps N] [--quality high|medium|small]` makes a movie from rendered frames, and `hdc render scene.hdg out.mov --frames A B` renders straight to a movie.
+- The encoder is built in (no ffmpeg or other libraries needed): Constrained Baseline H.264 with motion-compensated P frames, skipped macroblocks, the deblocking filter, and slices encoded in parallel (720p at about 20 frames per second). BT.709 colour, square pixels and the frame rate are tagged, so players show the right colours and speed. CI decodes the movies with ffmpeg and requires the pictures to match the encoder's bit for bit.
+
 ### Modelling tools (Phase 13)
 
 - Boolean node: union, intersect, subtract and shatter of closed meshes. Faces lying in the same plane are handled, attributes carry over (colours, uvs, materials), uncut polygons stay whole, and the result is welded with no T-junction cracks. About 0.6 s for an 80,000-polygon sphere against a 20,000-polygon torus.

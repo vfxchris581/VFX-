@@ -12,6 +12,7 @@
 #include "core/Node.h"
 #include "core/Ops.h"
 #include "core/Shader.h"
+#include "core/Video.h"
 #include "core/Usd.h"
 #include <cstdio>
 #include <cstdlib>
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include <csignal>
+#include <filesystem>
 #if defined(__has_include) && __has_include(<execinfo.h>) && __has_include(<unistd.h>)
 #include <execinfo.h>
 #include <unistd.h>
@@ -217,6 +219,34 @@ int main(int argc, char** argv) {
             g.addPrim({0, 1, 2});
             runOverElements(g, AttribClass::Point, *prog, 1, 24, nullptr, err);
         });
+    // movies: bytes pick the size, quantiser, slices, keyframe interval and the pixels
+    {
+        Bytes seed;
+        for (int i = 0; i < 64; ++i) seed.push_back(uint8_t(i * 29 + 3));
+        run("movie", seed, [](const Bytes& b) {
+            size_t pos = 0;
+            auto next = [&]() -> uint32_t { return pos < b.size() ? b[pos++] : uint32_t(b.size() * 7 % 251); };
+            const int w = 2 + int(next() % 70), h = 2 + int(next() % 50);
+            MovieOptions o;
+            o.qp = int(next() % 52);
+            o.slices = int(next() % 5);
+            o.keyint = int(next() % 4);
+            o.deblock = next() % 4 != 0;
+            MovieWriter mw;
+            std::string err;
+            const std::string path = (std::filesystem::temp_directory_path() / "hd_fuzz_movie.mp4").string();
+            if (!mw.open(path, w, h, o, err)) return;
+            std::vector<uint8_t> px(size_t(w) * size_t(h) * 4);
+            const int frames = 1 + int(next() % 4);
+            for (int f = 0; f < frames; ++f) {
+                for (size_t i = 0; i < px.size(); ++i) px[i] = uint8_t(next() * (i + 1) + uint32_t(f) * 13);
+                if (!mw.addFrame(px.data(), err)) std::abort();
+                if (mw.lastReconstruction().size() != size_t(w & ~1) * size_t(h & ~1) * 3 / 2) std::abort();
+            }
+            if (!mw.finish(err)) std::abort();
+            std::remove(path.c_str());
+        });
+    }
     // booleans: bytes pick the shapes, transforms (including degenerate scales and exact overlaps) and operation
     {
         Bytes seed;

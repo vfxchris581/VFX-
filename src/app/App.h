@@ -3,10 +3,13 @@
 #include "core/Node.h"
 #include "core/PathTracer.h"
 #include "core/ImageSequence.h"
+#include "core/Video.h"
 #include "render/Renderer.h"
+#include <atomic>
 #include <memory>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 struct GLFWwindow;
@@ -50,7 +53,7 @@ private:
     void drawNodeMenu(App& app);
 };
 
-enum class FileDialogMode { None, Open, SaveAs, ImportObj, ExportObj, ChooseFileParm, SaveImage, SaveSequence, MergeScene, InstallAsset, ExportUsd, RunPython, OpenSequence };
+enum class FileDialogMode { None, Open, SaveAs, ImportObj, ExportObj, ChooseFileParm, SaveImage, SaveSequence, MergeScene, InstallAsset, ExportUsd, RunPython, OpenSequence, SaveMovie };
 
 class App {
 public:
@@ -107,6 +110,24 @@ public:
         bool focusNext = false;
     } player;
     std::unique_ptr<SequenceCache> seqCache_;
+    // movies: export from the Sequence Player (background thread) and Render Sequence to .mp4 / .mov
+    struct MovieJob {
+        std::thread thread;
+        std::atomic<int> done{0}, total{0};
+        std::atomic<bool> cancel{false}, finished{false};
+        bool ok = false;
+        std::string error, path;
+        ~MovieJob() { cancel = true; if (thread.joinable()) thread.join(); }
+    };
+    std::unique_ptr<MovieJob> movieJob_;
+    void startMovieExport(const std::string& path);
+    void pollMovieJob();
+    int movieQuality = 1; // 0 high, 1 medium, 2 small
+    std::unique_ptr<MovieWriter> seqMovie_;
+    std::string seqMoviePath_;
+    void endSequence(bool stopped); // finishes a Render Sequence (and its movie)
+    void startRenderSequence(const std::string& path); // .png / .exr frames, or an .mp4 / .mov movie
+    bool renderingSequence() const { return seqActive_; }
     Node* current() { return net().findNode(currentId); }
     const std::vector<std::string>& netPath() const { return netPath_; }
     void diveInto(Node* subnetNode);

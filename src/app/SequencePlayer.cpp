@@ -50,6 +50,39 @@ bool App::openSequence(const std::string& anyFrame, bool focus) {
     return true;
 }
 
+void App::startMovieExport(const std::string& path) {
+    if (movieJob_ || !seqCache_ || seqCache_->sequence().size() == 0) return;
+    auto job = std::make_unique<MovieJob>();
+    job->path = path;
+    job->total = int(seqCache_->sequence().size());
+    MovieOptions mo;
+    mo.fps = player.fps;
+    mo.qp = movieQpForQuality(movieQuality);
+    SequenceInfo seq = seqCache_->sequence(); // the thread's own copy
+    MovieJob* j = job.get();
+    job->thread = std::thread([j, seq, mo] {
+        std::string err;
+        j->ok = writeMovie(seq, j->path, mo, [j](int done, int) { j->done = done; return !j->cancel; }, err);
+        j->error = err;
+        j->finished = true;
+    });
+    movieJob_ = std::move(job);
+    status("Writing " + path + "...");
+}
+
+void App::pollMovieJob() {
+    if (!movieJob_ || !movieJob_->finished) return;
+    movieJob_->thread.join();
+    std::error_code ec;
+    if (movieJob_->ok) {
+        double mb = double(fs::file_size(movieJob_->path, ec)) / (1024.0 * 1024.0);
+        char size[32];
+        std::snprintf(size, sizeof size, "%.1f MB", ec ? 0.0 : mb);
+        status("Saved movie " + movieJob_->path + " (" + std::to_string(int(movieJob_->total)) + " frames, " + size + ")");
+    } else status(movieJob_->error == "Cancelled" ? "Movie cancelled" : "Movie failed: " + movieJob_->error, movieJob_->error != "Cancelled");
+    movieJob_.reset();
+}
+
 // Manual stepping always wraps around.
 void App::playerStep(int frames) {
     if (!seqCache_ || seqCache_->sequence().size() == 0) return;
@@ -79,6 +112,22 @@ void App::drawSequencePlayer() {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip(player.lastRendered.empty() ? "Render a sequence first (Render View > Render Sequence...)" : "%s", player.lastRendered.c_str());
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (movieJob_) {
+        // export running: progress and cancel
+        const int done = movieJob_->done, total = std::max(1, int(movieJob_->total));
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "Movie %d / %d", done, total);
+        ImGui::ProgressBar(float(done) / float(total), ImVec2(150, 0), buf);
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel##movie")) movieJob_->cancel = true;
+    } else {
+        ImGui::BeginDisabled(n == 0);
+        if (ImGui::Button("Save Movie...")) openFileDialog(FileDialogMode::SaveMovie);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Write the sequence as an H.264 movie (.mp4 or .mov) at the player's frame rate (%.0f fps)", double(player.fps));
+        ImGui::EndDisabled();
+    }
     if (n > 0) {
         ImGui::SameLine();
         ImGui::TextUnformatted(seq->label.c_str());

@@ -15,6 +15,7 @@
 #include "core/PathTracer.h"
 #include "core/Shader.h"
 #include "core/ImageSequence.h"
+#include "core/Video.h"
 #include "core/Volume.h"
 #include <chrono>
 #include <cstdio>
@@ -3445,6 +3446,215 @@ TEST(image_sequence) {
         CHECK(cache.waitFor(0, 5000) && cache.frame(0)->rgba[0] >= 187 && cache.frame(0)->rgba[0] <= 189);
         cache.setExposure(-1); // reloads at 0.25
         CHECK(cache.waitFor(0, 5000) && cache.frame(0)->rgba[0] >= 136 && cache.frame(0)->rgba[0] <= 138);
+    }
+    fs::remove_all(dir);
+}
+
+// Minimal MP4 / MOV reader for the movie tests: box tree and the video sample table.
+struct Mp4Info {
+    std::string brand;
+    bool hasMoov = false, mdatOk = false;
+    uint32_t timescale = 0, duration = 0, width = 0, height = 0;
+    std::vector<uint32_t> sizes, sync;
+    std::vector<uint64_t> offsets;
+    std::vector<uint8_t> sps, pps;
+    std::vector<std::string> boxes; // every box type seen
+};
+static uint32_t be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; }
+static void parseBoxes(const std::vector<uint8_t>& f, size_t at, size_t end, Mp4Info& info) {
+    while (at + 8 <= end) {
+        uint64_t size = be32(&f[at]);
+        std::string type(reinterpret_cast<const char*>(&f[at + 4]), 4);
+        size_t hdr = 8;
+        if (size == 1) { size = (uint64_t(be32(&f[at + 8])) << 32) | be32(&f[at + 12]); hdr = 16; }
+        if (size < hdr || at + size > end) return;
+        info.boxes.push_back(type);
+        const uint8_t* d = &f[at + hdr];
+        if (type == "ftyp") info.brand.assign(reinterpret_cast<const char*>(d), 4);
+        if (type == "moov") info.hasMoov = true;
+        if (type == "mdat") info.mdatOk = at + size == end || true;
+        if (type == "mdhd") { info.timescale = be32(d + 12); info.duration = be32(d + 16); }
+        if (type == "tkhd") { info.width = be32(d + 76) >> 16; info.height = be32(d + 80) >> 16; }
+        if (type == "stsz") { uint32_t n = be32(d + 8); for (uint32_t i = 0; i < n; ++i) info.sizes.push_back(be32(d + 12 + 4 * i)); }
+        if (type == "stss") { uint32_t n = be32(d + 4); for (uint32_t i = 0; i < n; ++i) info.sync.push_back(be32(d + 8 + 4 * i)); }
+        if (type == "stco") { uint32_t n = be32(d + 4); for (uint32_t i = 0; i < n; ++i) info.offsets.push_back(be32(d + 8 + 4 * i)); }
+        if (type == "avcC") {
+            size_t sl = size_t(d[6]) << 8 | d[7];
+            info.sps.assign(d + 8, d + 8 + sl);
+            size_t pl = size_t(d[9 + sl]) << 8 | d[10 + sl];
+            info.pps.assign(d + 11 + sl, d + 11 + sl + pl);
+        }
+        static const std::set<std::string> containers = {"moov", "trak", "mdia", "minf", "stbl", "dinf"};
+        if (containers.count(type)) parseBoxes(f, at + hdr, at + size, info);
+        if (type == "stsd") parseBoxes(f, at + hdr + 8, at + size, info);
+        if (type == "avc1") parseBoxes(f, at + hdr + 78, at + size, info);
+        at += size;
+    }
+}
+static std::vector<uint8_t> readAll(const std::string& path) {
+    std::vector<uint8_t> b;
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return b;
+    std::fseek(f, 0, SEEK_END);
+    b.resize(size_t(std::ftell(f)));
+    std::fseek(f, 0, SEEK_SET);
+    if (std::fread(b.data(), 1, b.size(), f) != b.size()) b.clear();
+    std::fclose(f);
+    return b;
+}
+
+TEST(movie_writer) {
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "hd_movie_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    // 30 frames of a disc moving over a gradient, 100 x 60 (not a multiple of 16)
+    const int w = 100, h = 60, n = 30;
+    auto frame = [&](int f) {
+        std::vector<uint8_t> px(size_t(w) * h * 4, 255);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                uint8_t* p = &px[(size_t(y) * w + size_t(x)) * 4];
+                bool disc = (x - 15 - 2 * f) * (x - 15 - 2 * f) + (y - 30) * (y - 30) < 100;
+                p[0] = disc ? 240 : uint8_t(x * 2); p[1] = disc ? 200 : uint8_t(y * 3); p[2] = disc ? 40 : 128;
+            }
+        return px;
+    };
+    std::string err;
+    for (const char* ext : {".mp4", ".mov"}) {
+        std::string path = (dir / (std::string("m") + ext)).string();
+        MovieWriter mw;
+        MovieOptions o;
+        o.fps = 25; o.qp = 23; o.keyint = 12; o.slices = 3;
+        CHECK(mw.open(path, w, h, o, err));
+        double se = 0;
+        for (int f = 0; f < n; ++f) {
+            auto px = frame(f);
+            CHECK(mw.addFrame(px.data(), err));
+            // the decoder's picture is close to the source (luma against the source's luma)
+            if (f == n - 1) {
+                const auto& r = mw.lastReconstruction();
+                CHECK(r.size() == size_t(w) * h * 3 / 2);
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x) {
+                        const uint8_t* p = &px[(size_t(y) * w + size_t(x)) * 4];
+                        double Y = 16 + 219 * (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) / 255.0;
+                        double d = Y - r[size_t(y) * w + size_t(x)];
+                        se += d * d;
+                    }
+            }
+        }
+        double psnr = 10 * std::log10(255.0 * 255.0 / std::max(1e-9, se / (w * h)));
+        if (psnr < 38) std::printf("  movie psnr %.1f dB\n", psnr);
+        CHECK(psnr > 38);
+        CHECK(mw.finish(err));
+        CHECK(mw.width() == 100 && mw.height() == 60 && mw.frames() == n);
+        // the file: brand, sample table, keyframes, samples made of length-prefixed slice NAL units
+        auto bytes = readAll(path);
+        Mp4Info info;
+        parseBoxes(bytes, 0, bytes.size(), info);
+        CHECK(info.brand == (std::string(ext) == ".mp4" ? "isom" : "qt  "));
+        CHECK(info.hasMoov && info.sizes.size() == size_t(n) && info.offsets.size() == size_t(n));
+        CHECK(info.sync == std::vector<uint32_t>({1, 13, 25}));
+        CHECK(info.width == 100 && info.height == 60 && info.timescale == 25000 && info.duration == uint32_t(n) * 1000);
+        CHECK(info.sps.size() > 4 && info.sps[0] == 0x67 && info.sps[1] == 66 && info.pps.size() > 1 && info.pps[0] == 0x68);
+        bool samplesOk = true, epb = true;
+        for (int i = 0; i < n && samplesOk; ++i) {
+            size_t at = size_t(info.offsets[size_t(i)]), end = at + info.sizes[size_t(i)];
+            int slices = 0;
+            while (at + 4 <= end && samplesOk) {
+                size_t len = be32(&bytes[at]);
+                int type = bytes[at + 4] & 31;
+                bool key = std::find(info.sync.begin(), info.sync.end(), uint32_t(i + 1)) != info.sync.end();
+                samplesOk = len > 1 && at + 4 + len <= end && type == (key ? 5 : 1);
+                // emulation prevention: no 00 00 0x (x <= 2) inside a NAL unit
+                for (size_t k = at + 4; samplesOk && k + 2 < at + 4 + len; ++k)
+                    if (bytes[k] == 0 && bytes[k + 1] == 0 && bytes[k + 2] <= 2) epb = false;
+                at += 4 + len;
+                ++slices;
+            }
+            samplesOk = samplesOk && at == end && slices == 2; // 4 macroblock rows in 3 slices: 2 + 2 rows
+        }
+        CHECK(samplesOk && epb);
+    }
+    // same input, same file (slices are encoded in parallel)
+    {
+        auto enc = [&](const std::string& path, int slices) {
+            MovieWriter mw;
+            MovieOptions o;
+            o.slices = slices;
+            mw.open(path, w, h, o, err);
+            for (int f = 0; f < 8; ++f) { auto px = frame(f); mw.addFrame(px.data(), err); }
+            mw.finish(err);
+            return readAll(path);
+        };
+        auto a = enc((dir / "d1.mp4").string(), 4), b = enc((dir / "d2.mp4").string(), 4);
+        CHECK(!a.empty() && a == b);
+    }
+    // a still image: P frames are all skipped, so they cost a few bytes each
+    {
+        MovieWriter mw;
+        MovieOptions o;
+        o.keyint = 100;
+        auto px = frame(0);
+        CHECK(mw.open((dir / "still.mp4").string(), w, h, o, err));
+        size_t afterKey = 0;
+        for (int f = 0; f < 20; ++f) { CHECK(mw.addFrame(px.data(), err)); if (f == 0) afterKey = mw.bytes(); }
+        CHECK((mw.bytes() - afterKey) / 19 < 40);
+        CHECK(mw.finish(err));
+    }
+    // quality presets: smaller files for lower quality
+    {
+        size_t sizes[3];
+        for (int q = 0; q < 3; ++q) {
+            MovieWriter mw;
+            MovieOptions o;
+            o.qp = movieQpForQuality(q);
+            mw.open((dir / "q.mp4").string(), w, h, o, err);
+            for (int f = 0; f < 6; ++f) { auto px = frame(f); mw.addFrame(px.data(), err); }
+            sizes[q] = mw.bytes();
+            mw.finish(err);
+        }
+        CHECK(sizes[0] > sizes[1] && sizes[1] > sizes[2]);
+    }
+    // errors: other extensions, tiny frames; an unfinished movie leaves no file behind
+    {
+        MovieWriter mw;
+        MovieOptions o;
+        CHECK(!mw.open((dir / "x.avi").string(), w, h, o, err) && !err.empty());
+        CHECK(!mw.open((dir / "x.mp4").string(), 1, 1, o, err));
+    }
+    {
+        std::string path = (dir / "partial.mp4").string();
+        {
+            MovieWriter mw;
+            MovieOptions o;
+            CHECK(mw.open(path, w, h, o, err));
+            auto px = frame(0);
+            mw.addFrame(px.data(), err);
+        }
+        CHECK(!fs::exists(path));
+    }
+    // writeMovie from an image sequence; a frame of another size is refused; cancelling removes the file
+    {
+        for (int f = 1; f <= 5; ++f) {
+            auto px = frame(f);
+            char nm[32];
+            std::snprintf(nm, sizeof nm, "s.%04d.png", f);
+            writePng8((dir / nm).string(), px, w, h, 4);
+        }
+        SequenceInfo seq;
+        CHECK(findSequence((dir / "s.0003.png").string(), seq, err));
+        MovieOptions o;
+        int calls = 0;
+        CHECK(writeMovie(seq, (dir / "s.mov").string(), o, [&](int done, int total) { calls += done <= total; return true; }, err));
+        CHECK(calls == 5 && fs::file_size(dir / "s.mov") > 1000);
+        CHECK(!writeMovie(seq, (dir / "c.mp4").string(), o, [](int done, int) { return done < 3; }, err) && err == "Cancelled");
+        CHECK(!fs::exists(dir / "c.mp4"));
+        std::vector<uint8_t> small(16 * 16 * 4, 0);
+        writePng8((dir / "s.0006.png").string(), small, 16, 16, 4);
+        CHECK(findSequence((dir / "s.0001.png").string(), seq, err));
+        CHECK(!writeMovie(seq, (dir / "bad.mp4").string(), o, nullptr, err) && err.find("16 x 16") != std::string::npos);
     }
     fs::remove_all(dir);
 }

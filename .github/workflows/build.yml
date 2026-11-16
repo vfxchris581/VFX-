@@ -58,6 +58,13 @@ jobs:
           HD_PYTHON: ${{ steps.py.outputs.python-path }}
         run: ctest --test-dir build -C Release --output-on-failure
 
+      # The H.264 encoder against a real decoder: decoded pictures must equal the encoder's, bit for bit
+      - name: Movie decode check (ffmpeg)
+        if: matrix.name == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+          tools/check_movie.sh build/hdc examples
+
       - name: Read version
         shell: bash
         run: |

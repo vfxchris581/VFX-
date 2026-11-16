@@ -50,6 +50,7 @@ So far it has the **procedural core** (geometry engine, node graph, a VEX-like s
 - **Render View.** A progressive CPU path tracer renders the displayed node from the Scene View camera or a camera node.
   - **Materials** (Material node) follow a principled model: base color, roughness, metallic, specular, glow, **transmission** (glass and water: rough or smooth refraction with exact Fresnel and an index of refraction), and **subsurface scattering** (a random walk inside closed meshes, with a per-channel scatter distance, for wax, skin and marble). Reflections use GGX microfacets with visible-normal sampling.
   - **Sequence Player**: plays rendered PNG / EXR / HDR sequences in a tab next to the Render View, like Houdini's MPlay: loop / once / ping-pong at any frame rate, scrub, step, zoom, channels, exposure. Frames load in the background ahead of the playhead.
+  - **Movies**: save sequences as H.264 **MP4** or **MOV** (Sequence Player > Save Movie..., or Render Sequence to `out.mp4`), with a built-in encoder: no ffmpeg needed. `hdc movie frame.0001.png out.mp4` does it from the command line.
   - **Shader networks** (Material Builder): build a surface from Shading nodes (noise, Voronoi cells, waves, checkers, ramps, textures, maths, bound attributes) wired into a principled Shader Output, as with Houdini's material builder. The Render View evaluates the network at every shading point, with bump mapping; the viewport shows it baked onto the points.
   - **Texture maps**: base color, roughness, metallic and tangent-space normal maps from PNG, OpenEXR or Radiance HDR files, read through the `uv` attribute. **UV Project** makes planar, box, cylindrical or spherical uvs. Put `<UDIM>` in a file name for UDIM tiles, and `$HIP` at the start of a path for the scene's folder.
   - **Lighting**: point, spot, area, distant, sky and environment lights. An Environment Light can use an **HDRI** (lat-long .hdr or .exr), which is importance sampled and combined with BSDF sampling by multiple importance sampling. Glass casts tinted shadows.
@@ -215,6 +216,8 @@ hdc cook examples/city.hdg city.obj         # export the display node
 hdc frames examples/ripples.hdg out_$F.obj 1 48   # export a frame sequence
 hdc render examples/smoke.hdg smoke.png --frame 90 --samples 64   # path-trace a frame
 hdc render examples/fire.hdg fire.png --frames 1 48          # fire.0001.png ...
+hdc render examples/fire.hdg fire.mp4 --frames 1 48          # straight to an H.264 movie (.mp4 or .mov)
+hdc movie fire.0001.png fire.mov --quality high --fps 24     # a movie from rendered frames
 hdc render scene.hdg shot.png --camera camera1                # through a camera node, using the scene's lights
 hdc render examples/materials.hdg shot.exr --denoise          # EXR with albedo, N and Z passes
 hdc image examples/comp.hdg comp.$F4.png --frames 1 24        # write a comp sequence
